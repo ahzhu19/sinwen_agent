@@ -17,6 +17,24 @@ services:
       retries: 20
       start_period: 30s
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: hello-agents-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: hello_agents
+      POSTGRES_USER: hello_agents
+      POSTGRES_PASSWORD: hello-agents-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hello_agents -d hello_agents"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   milvus-etcd:
     image: quay.io/coreos/etcd:v3.5.25
     container_name: hello-agents-milvus-etcd
@@ -86,6 +104,7 @@ services:
 volumes:
   neo4j_data:
   neo4j_logs:
+  postgres_data:
   milvus_etcd_data:
   milvus_minio_data:
   milvus_data:

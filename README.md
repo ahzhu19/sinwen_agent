@@ -59,7 +59,7 @@ SERPAPI_API_KEY=your-serpapi-key
 
 ### 本地记忆基础设施（可选）
 
-启动 Neo4j 图数据库 + Milvus 向量数据库：
+启动 PostgreSQL 关系数据库 + Neo4j 图数据库 + Milvus 向量数据库：
 
 ```bash
 docker compose up -d
@@ -70,10 +70,13 @@ docker compose ps
 
 | 服务 | 地址 |
 |------|------|
+| PostgreSQL | postgresql://hello_agents:hello-agents-password@localhost:5432/hello_agents |
 | Neo4j Browser | http://localhost:7474 |
 | Neo4j Bolt | bolt://localhost:7687 |
 | Milvus | http://localhost:19530 |
 | MinIO Console | http://localhost:9001 |
+
+记忆系统实现状态和当前妥协项见 `memory/implementation_status.md`。
 
 停止服务：`docker compose down`，清除数据：`docker compose down -v`
 
