@@ -22,6 +22,20 @@
 
 - **ToolChain**（`tools/chain.py`）— 工具链管理器，按顺序执行多个工具，支持模板变量和异步执行
 - **Tool / ToolRegistry** — 新增 `arun()` / `aexecute()` 异步方法
+## 记忆系统
+
+四类记忆模块，按生命周期和存储后端划分：
+
+| 类型 | 存储 | 检索方式 |
+|------|------|----------|
+| Working | 内存 (InMemoryStore) | TF-IDF + 关键词 + 时间衰减 + 重要性加权 |
+| Episodic | PostgreSQL + Milvus | 向量相似度 + 时间近因 + 重要性加权 |
+| Semantic | Neo4j + Milvus | 向量相似度 + 概念图关系 + 重要性加权 |
+| Perceptual | 内存占位 | 待实现 |
+
+MemoryTool 提供统一入口 (`add` / `search` 等 action)，MemoryManager 按类型路由到对应模块。
+配置项见 `.env.example`，实现状态见 `memory/implementation_status.md`。
+
 
 ## 项目结构
 
@@ -29,7 +43,7 @@
 core/           # Agent 基类、LLM 客户端、消息系统、配置
 agents/         # 四种 Agent 实现 + 提示词模板
 tools/          # 工具基类、注册表、链式执行、内置工具
-memory/         # 记忆系统模块骨架（工作/情景/语义/感知记忆）
+memory/         # 记忆系统（工作/情景/语义/感知记忆，PostgreSQL + Neo4j + Milvus）
 tests/          # 测试用例
 scripts/        # 真机试用脚本
 docs/           # 设计文档与规范
@@ -55,6 +69,10 @@ LLM_BASE_URL=https://api.openai.com/v1
 # 可选：搜索工具密钥
 TAVILY_API_KEY=your-tavily-key
 SERPAPI_API_KEY=your-serpapi-key
+
+# 可选：Embedding 配置（情景/语义记忆需要）
+EMBED_API_KEY=your-embedding-api-key
+EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
 ### 本地记忆基础设施（可选）
