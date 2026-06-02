@@ -85,6 +85,24 @@ class FakeToolLLM(FakeLLM):
         return "fallback"
 
 
+class FakeStreamingToolLLM(FakeToolLLM):
+    """模拟工具调用完成后，再流式生成最终答案。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream_messages: LLMMessages | None = None
+
+    def stream_invoke(
+        self,
+        messages: LLMMessages,
+        temperature: float = 0,
+        **kwargs: Any,
+    ) -> Iterator[str]:
+        self.stream_messages = messages
+        yield "结果"
+        yield "是 3"
+
+
 class AddTool(Tool):
     @property
     def name(self) -> str:
@@ -138,6 +156,33 @@ def test_simple_agent_stream_run() -> None:
     chunks = list(agent.stream_run("hi"))
     assert chunks == ["mock", " reply"]
     assert agent.get_history()[-1].content == "mock reply"
+
+
+def test_simple_agent_stream_run_with_tools_streams_final_answer() -> None:
+    registry = ToolRegistry()
+    registry.register_tool(AddTool())
+    llm = FakeStreamingToolLLM()
+    agent = SimpleAgent(
+        name="test",
+        llm=llm,
+        tool_registry=registry,
+        enable_tool_calling=True,
+    )
+
+    chunks = list(agent.stream_run("1+2等于多少"))
+
+    assert chunks == ["结果", "是 3"]
+    assert llm._round == 2
+    assert llm.stream_messages is not None
+    assert any(
+        isinstance(message, dict)
+        and message.get("role") == "tool"
+        and message.get("content") == "3"
+        for message in llm.stream_messages
+    )
+    history = agent.get_history()
+    assert history[-2].content == "1+2等于多少"
+    assert history[-1].content == "结果是 3"
 
 
 def test_simple_agent_tool_calling() -> None:

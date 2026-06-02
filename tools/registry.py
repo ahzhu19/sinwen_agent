@@ -47,3 +47,12 @@ class ToolRegistry:
             return tool.run(**arguments)
         except Exception as e:
             return f"错误：工具 '{name}' 执行失败 - {e}"
+
+    async def aexecute(self, name: str, arguments: dict[str, Any]) -> str:
+        tool = self._tools.get(name)
+        if tool is None:
+            return f"错误：未找到工具 '{name}'"
+        try:
+            return await tool.arun(**arguments)
+        except Exception as e:
+            return f"错误：工具 '{name}' 执行失败 - {e}"

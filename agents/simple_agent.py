@@ -21,7 +21,7 @@ class SimpleAgent(Agent):
     特性：
     - 纯对话模式（无工具）
     - 可选 Function Calling 工具调用
-    - 同步流式输出（stream_run，不含工具循环）
+    - 同步流式输出（stream_run，工具调用后流式生成最终回答）
     """
 
     def __init__(
@@ -133,9 +133,82 @@ class SimpleAgent(Agent):
         return self.tool_registry.execute(tool_name, arguments)
 
     def stream_run(self, input_text: str, **kwargs) -> Iterator[str]:
-        """流式运行 Agent（纯对话，不执行工具循环）。"""
+        """流式运行 Agent，逐块返回最终回复。"""
+        if not self.enable_tool_calling or self.tool_registry is None:
+            yield from self._stream_chat(input_text, **kwargs)
+            return
+        yield from self._stream_with_tools(input_text, **kwargs)
+
+    def _stream_chat(self, input_text: str, **kwargs: Any) -> Iterator[str]:
         messages = self._build_messages(input_text)
         temperature = kwargs.pop("temperature", self.config.temperature)
+
+        full_response = ""
+        for chunk in self.llm.stream_invoke(messages, temperature=temperature, **kwargs):
+            full_response += chunk
+            yield chunk
+
+        self.add_message(Message(content=input_text, role="user"))
+        self.add_message(Message(content=full_response, role="assistant"))
+
+    def _stream_with_tools(self, input_text: str, **kwargs: Any) -> Iterator[str]:
+        messages = self._build_messages(input_text)
+        temperature = kwargs.pop("temperature", self.config.temperature)
+        tool_schemas = self.tool_registry.get_tool_schemas()  # type: ignore[union-attr]
+
+        current_iteration = 0
+        while current_iteration < self.max_tool_iterations:
+            current_iteration += 1
+            try:
+                response = self.llm.invoke_with_tools(
+                    messages=messages,
+                    tools=tool_schemas,
+                    tool_choice="auto",
+                    temperature=temperature,
+                    **kwargs,
+                )
+            except Exception as e:
+                print(f"❌ LLM 调用失败: {e}")
+                break
+
+            tool_calls = response.tool_calls
+            if not tool_calls:
+                break
+
+            messages.append({
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            })
+
+            for tool_call in tool_calls:
+                try:
+                    arguments = json.loads(tool_call.arguments)
+                except json.JSONDecodeError as e:
+                    print(f"❌ 工具参数解析失败: {e}")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": f"错误：参数格式不正确 - {e}",
+                    })
+                    continue
+
+                result = self._execute_tool_call(tool_call.name, arguments)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result,
+                })
 
         full_response = ""
         for chunk in self.llm.stream_invoke(messages, temperature=temperature, **kwargs):

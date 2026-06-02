@@ -34,3 +34,9 @@ class Tool(ABC):
     @abstractmethod
     def run(self, **kwargs: Any) -> str:
         """执行工具，返回字符串结果"""
+
+    async def arun(self, **kwargs: Any) -> str:
+        """异步执行工具（默认通过线程池卸载同步 run）。"""
+        import asyncio
+
+        return await asyncio.to_thread(self.run, **kwargs)
