@@ -88,7 +88,7 @@ docker compose ps
 
 | 服务 | 地址 |
 |------|------|
-| PostgreSQL | postgresql://hello_agents:hello-agents-password@localhost:5432/hello_agents |
+| PostgreSQL | postgresql://hello_agents:hello-agents-password@localhost:55432/hello_agents |
 | Neo4j Browser | http://localhost:7474 |
 | Neo4j Bolt | bolt://localhost:7687 |
 | Milvus | http://localhost:19530 |
@@ -113,6 +113,7 @@ print(a.run("解释什么是摩尔定律"))
 ```bash
 python scripts/try_plan_and_solve.py --task "规划并回答：如何入门 Python"
 python scripts/try_reflection.py --mode code
+uv run python scripts/try_memory.py
 ```
 
 ### 运行测试
@@ -124,3 +125,71 @@ uv run pytest tests/ -v
 ## 设计理念
 
 这个项目不依赖 LangChain、AutoGPT 等框架。每个 Agent 的推理循环都是显式手写的——消息历史怎么管、模型输出怎么解析、工具调用怎么在循环里组合——目的是理解 Agent 的内部运作机制，而不是学会调某个库的 API。
+
+
+## 项目状态
+
+### 已完成亮点
+
+**Agent 范式**
+- 四种经典 Agent 全部实现，推理循环显式手写，不依赖 LangChain / AutoGPT
+- 每种 Agent 有对应测试覆盖
+
+**工具系统**
+- Calculator 基于 Python AST 安全求值，防护注入攻击
+- Search 支持 Tavily / SerpApi 双后端，可按关键词或 LLM 智能路由
+- ToolChain 实现工具链顺序执行，支持模板变量和异步
+- 所有工具支持 `arun()` 异步方法
+
+**记忆系统**
+- 四类记忆模块：Working / Episodic / Semantic / Perceptual
+- Working 记忆：内存存储 + TF-IDF + 关键词 + 时间衰减 + 重要性加权混合检索，带 TTL 过期和容量淘汰
+- Episodic 记忆：PostgreSQL 结构化存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.8 + 时间近因 × 0.2) × (0.8 + 重要性 × 0.4)`
+- Semantic 记忆：Neo4j 图存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.7 + 图概念关系 × 0.3) × (0.8 + 重要性 × 0.4)`
+- MemoryTool 统一入口，`add` / `search` action 可用
+- MemoryManager 支持依赖注入，可替换存储后端
+- 核心代码 ~1750 行，测试 ~2110 行，测试/代码比 > 1.2
+- 全部存储层有 Protocol 接口 + Fake 实现，单元测试不依赖 Docker
+- 配置通过环境变量加载（`.env.example` 完整）
+
+### 未完成工作
+
+**Agent 层面**
+- SimpleAgent / ReActAgent 尚未集成记忆系统（Agent 的 run 循环里未调用 MemoryTool）
+- ReflectionAgent 的自我批评可以接入语义记忆做知识沉淀
+- PlanAndSolveAgent 的计划步骤可以依赖情景记忆中的历史计划复用
+
+**语义记忆概念抽取**
+- 当前仅使用 `metadata["concepts"]` 或简单正则分词兜底
+- 未接入 LLM 自动概念抽取，导致 Neo4j 图检索质量受限
+- 建议引入概念抽取器接口（LLM 或 jieba 分词），替代正则兜底
+
+**双写事务性**
+- EpisodicMemory / SemanticMemory 的 `add` 先写结构化/图存储再写 Milvus
+- 如果第二个写失败，第一个不回滚，可能产生孤立数据
+- 建议引入 outbox 模式或 saga 补偿机制
+
+**Neo4j 图扩展检索**
+- 当前图检索只对 Milvus 返回的候选记忆计算概念匹配分数
+- 尚未从 Neo4j 扩展一跳/两跳概念邻居加入候选集
+- 尚未利用关系类型权重和路径长度衰减
+
+**MemoryTool 未实现的 action**
+- `summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all` 为占位实现
+- search 目前仅支持 episodic 和 semantic，working 的 search 需要从 WorkingMemory.retrieve 桥接
+
+**PerceptualMemory**
+- 仍为基础占位，未接入多模态处理（图片理解、语音转写等）
+
+**其他已知问题**
+- `_add_memory` 会对调用方传入的 metadata dict 执行 `.update()` 产生副作用
+- MemoryTool 默认仅启用 `working` 类型，episodic/semantic 需显式传入
+- 向量维度变更（更换 embedding 模型）会导致 Milvus collection 维度不匹配
+- InMemoryStore 按类型索引虽然存在，但 WorkingMemory 仍保留旧模块引用，未全局统一
+
+**跨模块集成**
+- Agent ↔ MemoryTool 尚未打通（Agent 的 tool 列表中未包含 MemoryTool）
+- 各 Agent 的 prompts 中未包含记忆操作指导
+- 缺少端到端集成测试（Agent + MemoryTool 联调）
+
+完整妥协项详见 [memory/implementation_status.md](memory/implementation_status.md)。
