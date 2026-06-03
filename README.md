@@ -36,6 +36,20 @@
 MemoryTool 提供统一入口 (`add` / `search` 等 action)，MemoryManager 按类型路由到对应模块。
 配置项见 `.env.example`，实现状态见 `memory/implementation_status.md`。
 
+## RAG 知识库
+
+RAG 系统位于 `rag/`，使用 MarkItDown 将外部文档转换为 Markdown，再进行结构化分块、embedding 和 Milvus 检索。PostgreSQL 保存文档、Markdown、chunk 和摄取状态，Milvus 保存可重建的 chunk 向量索引。
+
+第一版通过 `RagTool` 暴露三个 action：
+
+- `ingest`：摄取本地文件。
+- `search`：只检索相关片段。
+- `answer`：检索片段后生成带来源的回答。
+
+本地使用前需要配置 `DATABASE_URL`、`MILVUS_*` 和 `EMBED_*`。
+
+真机试用：`uv run python scripts/try_rag.py ingest --source <文件路径>`。  
+`SimpleAgent.with_agent_tools(enable_rag=True)` 或 `create_agent_tool_registry(enable_rag=True)` 可将 `rag` 注册到 Agent 工具列表。
 
 ## 项目结构
 
@@ -44,6 +58,7 @@ core/           # Agent 基类、LLM 客户端、消息系统、配置
 agents/         # 四种 Agent 实现 + 提示词模板
 tools/          # 工具基类、注册表、链式执行、内置工具
 memory/         # 记忆系统（工作/情景/语义/感知记忆，PostgreSQL + Neo4j + Milvus）
+rag/            # 文档 RAG（MarkItDown + 分块 + PostgreSQL + Milvus）
 tests/          # 测试用例
 scripts/        # 真机试用脚本
 docs/           # 设计文档与规范

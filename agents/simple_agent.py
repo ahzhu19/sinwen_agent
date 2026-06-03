@@ -39,6 +39,39 @@ class SimpleAgent(Agent):
         self.enable_tool_calling = enable_tool_calling and tool_registry is not None
         self.max_tool_iterations = max_tool_iterations
 
+    @classmethod
+    def with_agent_tools(
+        cls,
+        name: str,
+        llm: BaseLLM,
+        *,
+        system_prompt: Optional[str] = DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT,
+        config: Optional[Config] = None,
+        enable_search: bool = True,
+        enable_calculator: bool = True,
+        enable_memory: bool = False,
+        enable_rag: bool = True,
+        max_tool_iterations: int = 5,
+    ) -> "SimpleAgent":
+        """使用默认工具集（含 RAG）创建 SimpleAgent。"""
+        from tools.agent_registry import create_agent_tool_registry
+
+        registry = create_agent_tool_registry(
+            enable_search=enable_search,
+            enable_calculator=enable_calculator,
+            enable_memory=enable_memory,
+            enable_rag=enable_rag,
+        )
+        return cls(
+            name=name,
+            llm=llm,
+            system_prompt=system_prompt,
+            config=config,
+            tool_registry=registry,
+            enable_tool_calling=True,
+            max_tool_iterations=max_tool_iterations,
+        )
+
     def run(self, input_text: str, **kwargs) -> str:
         """运行 Agent，返回完整回复。"""
         if not self.enable_tool_calling or self.tool_registry is None:

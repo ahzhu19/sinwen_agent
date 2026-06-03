@@ -1,0 +1,48 @@
+<h2>Markdown 分块策略</h2>
+<p class="subtitle">目标是在保留结构的同时控制 chunk 大小，让检索结果既相关又可读。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Chunking Pipeline</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px">
+      <div class="placeholder">标准 Markdown</div>
+      <div class="placeholder">标题层级树<br># / ## / ###</div>
+      <div class="placeholder">块级元素<br>段落 / 列表 / 表格 / 代码</div>
+      <div class="placeholder">语义合并<br>不切断关键结构</div>
+      <div class="placeholder">Token 预算<br>target / max</div>
+      <div class="placeholder">Overlap<br>标题 + 尾部上下文</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Chunk Metadata</div>
+  <div class="mockup">
+    <div class="mockup-body">
+      <div class="placeholder">heading_path = ["RAG 系统", "数据处理流程", "智能分块"]</div>
+      <div style="height:10px"></div>
+      <div class="placeholder">content = heading prefix + body block text</div>
+      <div style="height:10px"></div>
+      <div class="placeholder">char_start / char_end / token_count / chunk_index</div>
+    </div>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <h4>第一版保留</h4>
+    <ul>
+      <li>标题路径作为每个 chunk 的上下文前缀</li>
+      <li>表格和代码块默认整体保留，超长时再切</li>
+      <li>按 token target 合并相邻段落</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>第一版不复杂化</h4>
+    <ul>
+      <li>不做 LLM 语义切分</li>
+      <li>不做 query-aware 动态分块</li>
+      <li>不做多粒度父子 chunk 检索</li>
+    </ul>
+  </div>
+</div>

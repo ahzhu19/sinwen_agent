@@ -1,0 +1,50 @@
+<h2>查询增强与生成流程</h2>
+<p class="subtitle">第一版支持直接查询，预留 HyDE 和多查询扩展接口；生成结果必须带来源。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Query Pipeline</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px">
+      <div class="placeholder">用户查询</div>
+      <div class="placeholder">查询类型判断<br>LLM / 规则</div>
+      <div class="placeholder">查询增强<br>direct / HyDE / multi</div>
+      <div class="placeholder">向量化</div>
+      <div class="placeholder">Milvus Top-K</div>
+      <div class="placeholder">chunk 回填<br>PostgreSQL</div>
+      <div class="placeholder">上下文组装</div>
+    </div>
+    <div style="height:20px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="placeholder">去重与排序<br>chunk_id / score</div>
+      <div class="placeholder">LLM 生成<br>只基于上下文回答</div>
+      <div class="placeholder">返回<br>answer + sources</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Query Strategies</div>
+  <div class="options" data-multiselect>
+    <div class="option selected" data-choice="direct" onclick="toggleSelect(this)">
+      <div class="letter">D</div>
+      <div class="content">
+        <h3>Direct Search</h3>
+        <p>默认路径，直接 embedding 查询。稳定、低成本，适合作为 MVP。</p>
+      </div>
+    </div>
+    <div class="option" data-choice="hyde" onclick="toggleSelect(this)">
+      <div class="letter">H</div>
+      <div class="content">
+        <h3>HyDE</h3>
+        <p>先生成假设答案再检索。适合抽象问题，但会增加一次 LLM 调用。</p>
+      </div>
+    </div>
+    <div class="option" data-choice="multi" onclick="toggleSelect(this)">
+      <div class="letter">M</div>
+      <div class="content">
+        <h3>Multi Query</h3>
+        <p>生成多个子查询后合并检索。适合复杂问题，但要做去重和分数归一。</p>
+      </div>
+    </div>
+  </div>
+</div>

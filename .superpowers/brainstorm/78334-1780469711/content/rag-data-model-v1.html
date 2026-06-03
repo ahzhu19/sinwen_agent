@@ -1,0 +1,45 @@
+<h2>RAG 数据模型草图</h2>
+<p class="subtitle">第一版使用 PostgreSQL 保存可追踪元数据，Milvus 保存向量检索索引。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">PostgreSQL</div>
+    <div class="mockup-body">
+      <div class="placeholder"><strong>rag_documents</strong><br>id, source_uri, title, content_hash, mime_type, status, metadata_json, created_at</div>
+      <div style="height:12px"></div>
+      <div class="placeholder"><strong>rag_chunks</strong><br>id, document_id, chunk_index, content, heading_path, token_count, char_start, char_end, metadata_json</div>
+      <div style="height:12px"></div>
+      <div class="placeholder"><strong>rag_ingestion_runs</strong><br>id, document_id, status, error_message, started_at, finished_at</div>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Milvus</div>
+    <div class="mockup-body">
+      <div class="placeholder"><strong>hello_agents_rag_chunks</strong><br>id = chunk_id<br>vector<br>document_id<br>source_uri<br>metadata filters</div>
+      <div style="height:12px"></div>
+      <div class="placeholder">检索命中 chunk_id 后<br>回 PostgreSQL 取完整 chunk 文本和来源信息</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Why This Shape</div>
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>优点</h4>
+      <ul>
+        <li>chunk 文本、标题路径、来源可追踪</li>
+        <li>Milvus 只承担向量搜索，schema 简单</li>
+        <li>支持后续按 document_id 重建索引或删除文档</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>暂不做</h4>
+      <ul>
+        <li>第一版不引入 Neo4j 知识图谱</li>
+        <li>第一版不做多 collection 分库</li>
+        <li>第一版不做复杂权限模型</li>
+      </ul>
+    </div>
+  </div>
+</div>
