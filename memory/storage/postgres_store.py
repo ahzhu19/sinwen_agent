@@ -12,7 +12,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .config import MemoryConfig
+from ..config import MemoryConfig
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,13 @@
-"""Milvus 情景记忆向量存储。"""
+"""Milvus 向量存储适配器。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from pymilvus import MilvusClient
 
-from .config import MemoryConfig
+from ..config import MemoryConfig
 
 
 @dataclass(frozen=True)

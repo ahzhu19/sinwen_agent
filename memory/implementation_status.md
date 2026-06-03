@@ -10,6 +10,11 @@
   - 写入时同步写 Neo4j 语义图与 Milvus 向量库。
   - 检索公式为 `(向量相似度 * 0.7 + 图相似度 * 0.3) * (0.8 + 重要性 * 0.4)`。
   - Neo4j 中保存 `SemanticMemory`、`Concept`，并用 `MENTIONS` 关系连接。
+- `PerceptualMemory`：感知记忆第一版编排。
+  - 按 `text/image/audio/video/file` 模态路由到不同 Milvus collection。
+  - 元数据写入 `InMemoryPerceptualStore`，原始数据只保存路径或 URI。
+  - 检索公式为 `(向量相似度 * 0.8 + 时间近因性 * 0.2) * (0.8 + 重要性 * 0.4)`。
+  - 时间近因性使用指数衰减，并保留最低 0.1 基础分。
 
 ## 当前妥协
 
@@ -23,7 +28,10 @@
 - `MemoryTool` 默认只启用 `working`。
   - `episodic`、`semantic` 需要显式传入 `memory_types`，避免默认初始化时强制要求数据库和 embedding 配置。
 - `MemoryTool` 的 `summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all` 仍是占位。
-- `PerceptualMemory` 仍是基础占位实现，尚未接入多模态处理。
+- `PerceptualMemory` 暂未接入真实多模态 embedding 模型。
+  - 图像第一版使用 `caption` 或 `ocr_text` 作为文本代理。
+  - 音频第一版使用 `transcript` 作为文本代理。
+  - 跨模态检索当前是代理文本向量检索，不是 CLIP/CLAP 这类统一向量空间的真实跨模态检索。
 - 中文分词仍比较粗糙，`WorkingMemory` 和 `SemanticMemory` 的关键词兜底都还不是正式分词器。
 
 ## 后续建议
@@ -32,4 +40,5 @@
 - 为 Neo4j 实现图扩展检索，例如一跳/两跳概念邻居、关系类型权重、路径长度衰减。
 - 为 Milvus 双写失败增加补偿机制或 outbox。
 - 为 `MemoryTool` 补齐删除、更新、统计、整合等 action。
+- 为 `PerceptualMemory` 接入真实图像/音频 embedding provider，并实现跨模态分数归一化。
 - 引入更适合中文的 tokenizer，改善关键词检索和概念兜底质量。

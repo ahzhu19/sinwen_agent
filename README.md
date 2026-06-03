@@ -31,7 +31,7 @@
 | Working | 内存 (InMemoryStore) | TF-IDF + 关键词 + 时间衰减 + 重要性加权 |
 | Episodic | PostgreSQL + Milvus | 向量相似度 + 时间近因 + 重要性加权 |
 | Semantic | Neo4j + Milvus | 向量相似度 + 概念图关系 + 重要性加权 |
-| Perceptual | 内存占位 | 待实现 |
+| Perceptual | Milvus (多模态) + 内存元数据 | 向量相似度 + 时间近因 + 重要性加权 |
 
 MemoryTool 提供统一入口 (`add` / `search` 等 action)，MemoryManager 按类型路由到对应模块。
 配置项见 `.env.example`，实现状态见 `memory/implementation_status.md`。
@@ -146,6 +146,7 @@ uv run pytest tests/ -v
 - Working 记忆：内存存储 + TF-IDF + 关键词 + 时间衰减 + 重要性加权混合检索，带 TTL 过期和容量淘汰
 - Episodic 记忆：PostgreSQL 结构化存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.8 + 时间近因 × 0.2) × (0.8 + 重要性 × 0.4)`
 - Semantic 记忆：Neo4j 图存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.7 + 图概念关系 × 0.3) × (0.8 + 重要性 × 0.4)`
+- Perceptual 记忆：多模态 Milvus 路由（text/image/audio/video/file），元数据落内存，检索公式为 `(向量相似度 × 0.8 + 时间近因 × 0.2) × (0.8 + 重要性 × 0.4)`
 - MemoryTool 统一入口，`add` / `search` action 可用
 - MemoryManager 支持依赖注入，可替换存储后端
 - 核心代码 ~1750 行，测试 ~2110 行，测试/代码比 > 1.2
@@ -179,7 +180,8 @@ uv run pytest tests/ -v
 - search 目前仅支持 episodic 和 semantic，working 的 search 需要从 WorkingMemory.retrieve 桥接
 
 **PerceptualMemory**
-- 仍为基础占位，未接入多模态处理（图片理解、语音转写等）
+- 第一版实现已支持多模态路由（text/image/audio/video/file），图像和音频当前使用文本代理（caption/transcript），尚未接入真实多模态 embedding 模型（CLIP/CLAP）
+- 跨模态检索当前是代理文本向量检索，不是统一向量空间的真实跨模态检索
 
 **其他已知问题**
 - `_add_memory` 会对调用方传入的 metadata dict 执行 `.update()` 产生副作用

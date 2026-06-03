@@ -6,8 +6,6 @@ from typing import Any
 
 from .config import MemoryConfig
 from .embedding import EmbeddingProvider, create_embedding_provider
-from .episodic_store import EpisodicMemoryStore, create_episodic_store
-from .semantic_store import SemanticMemoryStore, create_semantic_store
 from .modules import (
     EpisodicMemory,
     InMemoryStore,
@@ -15,7 +13,10 @@ from .modules import (
     SemanticMemory,
     WorkingMemory,
 )
-from .vector_store import MilvusVectorStore, create_vector_store
+from .storage.document_store import PerceptualMemoryStore, create_perceptual_store
+from .storage.milvus_store import MilvusVectorStore, create_vector_store
+from .storage.neo4j_store import SemanticMemoryStore, create_semantic_store
+from .storage.postgres_store import EpisodicMemoryStore, create_episodic_store
 
 
 class MemoryManager:
@@ -35,6 +36,9 @@ class MemoryManager:
         semantic_store: SemanticMemoryStore | None = None,
         semantic_vector_store: MilvusVectorStore | None = None,
         semantic_embedding_provider: EmbeddingProvider | None = None,
+        perceptual_store: PerceptualMemoryStore | None = None,
+        perceptual_vector_stores: dict[str, MilvusVectorStore] | None = None,
+        perceptual_embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.config = config
         self.user_id = user_id
@@ -60,7 +64,11 @@ class MemoryManager:
                 embedding_provider=semantic_embedding_provider,
             )
         if enable_perceptual:
-            self.memory_modules["perceptual"] = PerceptualMemory(self.config, self.store)
+            self.memory_modules["perceptual"] = self._create_perceptual_memory(
+                perceptual_store=perceptual_store,
+                vector_stores=perceptual_vector_stores,
+                embedding_provider=perceptual_embedding_provider,
+            )
 
     def _create_episodic_memory(
         self,
@@ -96,6 +104,44 @@ class MemoryManager:
             user_id=self.user_id,
             semantic_store=store,
             vector_store=vectors,
+            embedding_provider=embeddings,
+        )
+
+    def _create_perceptual_memory(
+        self,
+        perceptual_store: PerceptualMemoryStore | None,
+        vector_stores: dict[str, MilvusVectorStore] | None,
+        embedding_provider: EmbeddingProvider | None,
+    ) -> PerceptualMemory:
+        store = perceptual_store or create_perceptual_store()
+        vectors = vector_stores or {
+            "text": create_vector_store(
+                self.config,
+                collection_name=self.config.milvus_perceptual_text_collection,
+            ),
+            "image": create_vector_store(
+                self.config,
+                collection_name=self.config.milvus_perceptual_image_collection,
+            ),
+            "audio": create_vector_store(
+                self.config,
+                collection_name=self.config.milvus_perceptual_audio_collection,
+            ),
+            "video": create_vector_store(
+                self.config,
+                collection_name=self.config.milvus_perceptual_video_collection,
+            ),
+            "file": create_vector_store(
+                self.config,
+                collection_name=self.config.milvus_perceptual_file_collection,
+            ),
+        }
+        embeddings = embedding_provider or create_embedding_provider(self.config)
+        return PerceptualMemory(
+            config=self.config,
+            user_id=self.user_id,
+            perceptual_store=store,
+            vector_stores=vectors,
             embedding_provider=embeddings,
         )
 

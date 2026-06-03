@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from memory.episodic_store import EpisodicEvent
-from memory.vector_store import VectorSearchHit
+from memory.storage.milvus_store import VectorSearchHit
+from memory.storage.postgres_store import EpisodicEvent
 
 
 class FakeEmbeddingProvider:

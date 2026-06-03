@@ -21,7 +21,7 @@ services:
     image: postgres:16-alpine
     container_name: hello-agents-postgres
     ports:
-      - "5432:5432"
+      - "55432:5432"
     environment:
       POSTGRES_DB: hello_agents
       POSTGRES_USER: hello_agents

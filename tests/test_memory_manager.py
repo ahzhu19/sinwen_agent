@@ -10,6 +10,7 @@ from tests.episodic_fakes import (
     FakeEpisodicStore,
     FakeVectorStore,
 )
+from tests.perceptual_fakes import create_perceptual_bundle
 from tests.semantic_fakes import create_semantic_bundle
 
 
@@ -34,6 +35,7 @@ def test_memory_manager_initializes_enabled_memory_modules() -> None:
 
 def test_memory_manager_can_initialize_all_memory_modules() -> None:
     semantic_bundle = create_semantic_bundle()
+    perceptual_bundle = create_perceptual_bundle()
     manager = MemoryManager(
         config=MemoryConfig(),
         user_id="user123",
@@ -47,6 +49,8 @@ def test_memory_manager_can_initialize_all_memory_modules() -> None:
         semantic_store=semantic_bundle.store,
         semantic_vector_store=semantic_bundle.vectors,
         semantic_embedding_provider=semantic_bundle.embeddings,
+        perceptual_vector_stores=perceptual_bundle.vector_stores,
+        perceptual_embedding_provider=perceptual_bundle.embeddings,
     )
 
     assert isinstance(manager.memory_modules["working"], WorkingMemory)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from memory.semantic_store import SemanticFact
+from memory.storage.neo4j_store import SemanticFact
 from tests.episodic_fakes import FakeEmbeddingProvider, FakeVectorStore
 
 

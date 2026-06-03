@@ -21,6 +21,11 @@ class MemoryConfig:
     milvus_uri: str = "http://localhost:19530"
     milvus_collection: str = "hello_agents_episodic_vectors"
     milvus_semantic_collection: str = "hello_agents_semantic_vectors"
+    milvus_perceptual_text_collection: str = "hello_agents_perceptual_text_vectors"
+    milvus_perceptual_image_collection: str = "hello_agents_perceptual_image_vectors"
+    milvus_perceptual_audio_collection: str = "hello_agents_perceptual_audio_vectors"
+    milvus_perceptual_video_collection: str = "hello_agents_perceptual_video_vectors"
+    milvus_perceptual_file_collection: str = "hello_agents_perceptual_file_vectors"
     milvus_vector_size: int = 1024
     milvus_metric_type: str = "COSINE"
     milvus_timeout: int = 30
@@ -67,6 +72,26 @@ class MemoryConfig:
             milvus_semantic_collection=os.getenv(
                 "MILVUS_SEMANTIC_COLLECTION",
                 "hello_agents_semantic_vectors",
+            ),
+            milvus_perceptual_text_collection=os.getenv(
+                "MILVUS_PERCEPTUAL_TEXT_COLLECTION",
+                "hello_agents_perceptual_text_vectors",
+            ),
+            milvus_perceptual_image_collection=os.getenv(
+                "MILVUS_PERCEPTUAL_IMAGE_COLLECTION",
+                "hello_agents_perceptual_image_vectors",
+            ),
+            milvus_perceptual_audio_collection=os.getenv(
+                "MILVUS_PERCEPTUAL_AUDIO_COLLECTION",
+                "hello_agents_perceptual_audio_vectors",
+            ),
+            milvus_perceptual_video_collection=os.getenv(
+                "MILVUS_PERCEPTUAL_VIDEO_COLLECTION",
+                "hello_agents_perceptual_video_vectors",
+            ),
+            milvus_perceptual_file_collection=os.getenv(
+                "MILVUS_PERCEPTUAL_FILE_COLLECTION",
+                "hello_agents_perceptual_file_vectors",
             ),
             milvus_vector_size=int(os.getenv("MILVUS_VECTOR_SIZE", "1024")),
             milvus_metric_type=os.getenv("MILVUS_METRIC_TYPE", "COSINE"),
