@@ -18,3 +18,4 @@ docs/
 .python-version
 # macOS
 .DS_Store
+.superpowers/
