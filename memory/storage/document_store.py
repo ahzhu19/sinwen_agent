@@ -38,6 +38,15 @@ class PerceptualMemoryStore(Protocol):
     def get_many(self, memory_ids: list[str]) -> list[PerceptualItem]:
         ...
 
+    def list_by_user(
+        self,
+        user_id: str,
+        *,
+        session_id: str | None = None,
+        limit: int = 10_000,
+    ) -> list[PerceptualItem]:
+        ...
+
     def delete(self, memory_id: str) -> None:
         ...
 
@@ -118,6 +127,22 @@ class InMemoryPerceptualStore:
 
     def get_many(self, memory_ids: list[str]) -> list[PerceptualItem]:
         return [self.items[memory_id] for memory_id in memory_ids if memory_id in self.items]
+
+    def list_by_user(
+        self,
+        user_id: str,
+        *,
+        session_id: str | None = None,
+        limit: int = 10_000,
+    ) -> list[PerceptualItem]:
+        items = [item for item in self.items.values() if item.user_id == user_id]
+        if session_id is not None:
+            items = [
+                item
+                for item in items
+                if item.metadata.get("session_id") == session_id
+            ]
+        return items[:limit]
 
     def delete(self, memory_id: str) -> None:
         self.items.pop(memory_id, None)

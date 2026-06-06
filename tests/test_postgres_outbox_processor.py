@@ -130,6 +130,53 @@ class FakePostgresOutbox:
             max_attempts=entry.max_attempts,
         )
 
+    def reclaim_stale_processing(self, *, timeout_seconds: int) -> int:
+        _ = timeout_seconds
+        reclaimed = 0
+        for entry_id, entry in list(self._entries.items()):
+            if entry.status != "processing":
+                continue
+            self._entries[entry_id] = VectorOutboxRecord(
+                id=entry.id,
+                memory_kind=entry.memory_kind,
+                memory_id=entry.memory_id,
+                user_id=entry.user_id,
+                session_id=entry.session_id,
+                collection_name=entry.collection_name,
+                op=entry.op,
+                vector=entry.vector,
+                status="pending",
+                attempts=entry.attempts,
+                max_attempts=entry.max_attempts,
+            )
+            reclaimed += 1
+        return reclaimed
+
+    def replay_dead(self, *, batch_size: int = 20, memory_kind: str | None = None) -> int:
+        replayed = 0
+        for entry_id, entry in list(self._entries.items()):
+            if replayed >= batch_size:
+                break
+            if memory_kind is not None and entry.memory_kind != memory_kind:
+                continue
+            if entry.status != "dead":
+                continue
+            self._entries[entry_id] = VectorOutboxRecord(
+                id=entry.id,
+                memory_kind=entry.memory_kind,
+                memory_id=entry.memory_id,
+                user_id=entry.user_id,
+                session_id=entry.session_id,
+                collection_name=entry.collection_name,
+                op=entry.op,
+                vector=entry.vector,
+                status="pending",
+                attempts=0,
+                max_attempts=entry.max_attempts,
+            )
+            replayed += 1
+        return replayed
+
 
 def test_processor_upserts_vector_to_milvus() -> None:
     vectors = FakeVectorStore()

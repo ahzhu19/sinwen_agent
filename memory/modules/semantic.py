@@ -9,6 +9,7 @@ from ..concept_extractor import ConceptExtractor, create_concept_extractor, extr
 from ..config import MemoryConfig
 from ..semantic_outbox_processor import SemanticOutboxProcessor
 from .base import MemoryRecord
+from .semantic_retrieve import retrieve_with_rrf
 
 
 class SemanticMemory:
@@ -119,67 +120,17 @@ class SemanticMemory:
         **kwargs: Any,
     ) -> list[MemoryRecord]:
         _ = kwargs
-        query_vector = self._embeddings.embed(query)
-        search_limit = max(limit * 3, limit)
-        hits = self._vectors.search(
-            query_vector=query_vector,
+        return retrieve_with_rrf(
+            config=self.config,
+            store=self._store,
+            vectors=self._vectors,
+            embeddings=self._embeddings,
+            concept_extractor=self._concept_extractor,
             user_id=self.user_id,
-            limit=search_limit,
+            query=query,
+            limit=limit,
             session_id=session_id,
         )
-        vector_scores = {hit.memory_id: hit.score for hit in hits}
-        candidate_ids = list(vector_scores.keys())
-
-        if hasattr(self._store, "list_pending_embedding"):
-            pending_facts = self._store.list_pending_embedding(
-                self.user_id,
-                session_id=session_id,
-                limit=self.config.semantic_read_your_writes_limit,
-            )
-            for fact in pending_facts:
-                if fact.id not in candidate_ids:
-                    candidate_ids.append(fact.id)
-                    vector_scores.setdefault(fact.id, 0.55)
-
-        query_concepts = self._concept_extractor.extract(query, {})
-        expanded_scores: dict[str, float] = {}
-        if hasattr(self._store, "expand_graph_candidates"):
-            expanded_scores = self._store.expand_graph_candidates(
-                self.user_id,
-                query_concepts,
-                max_hops=self.config.semantic_graph_max_hops,
-                hop_decay=self.config.semantic_graph_hop_decay,
-                limit=self.config.semantic_graph_expansion_limit,
-                session_id=session_id,
-            )
-        for memory_id in expanded_scores:
-            if memory_id not in candidate_ids:
-                candidate_ids.append(memory_id)
-
-        if not candidate_ids:
-            return []
-
-        facts = self._store.get_many(candidate_ids)
-        direct_graph_scores = self._store.score_related_memories(
-            user_id=self.user_id,
-            query_concepts=query_concepts,
-            memory_ids=candidate_ids,
-        )
-
-        scored: list[tuple[float, MemoryRecord]] = []
-        for fact in facts:
-            record = _semantic_fact_to_record(fact)
-            vector_score = vector_scores.get(fact.id, 0.0)
-            graph_score = max(
-                direct_graph_scores.get(fact.id, 0.0),
-                expanded_scores.get(fact.id, 0.0),
-            )
-            importance_weight = 0.8 + (record.importance * 0.4)
-            final_score = (vector_score * 0.7 + graph_score * 0.3) * importance_weight
-            scored.append((final_score, record))
-
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [record for _, record in scored[:limit]]
 
     def remove(self, memory_id: str) -> None:
         if not hasattr(self._store, "delete_memory_with_outbox"):

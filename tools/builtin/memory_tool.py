@@ -75,8 +75,11 @@ class MemoryManagerProtocol(Protocol):
         self,
         memory_type: str = "working",
         *,
+        strategy: str = "importance",
         session_id: str | None = None,
-        importance_threshold: float = 0.2,
+        importance_threshold: float | None = None,
+        older_than_days: int | None = None,
+        limit: int | None = None,
     ) -> int:
         ...
 
@@ -162,7 +165,7 @@ class MemoryTool(Tool):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "返回结果数量限制",
+                    "description": "search 返回数量限制；forget 单次最多删除条数",
                 },
                 "file_path": {
                     "type": "string",
@@ -176,6 +179,14 @@ class MemoryTool(Tool):
                 "importance_threshold": {
                     "type": "number",
                     "description": "forget/consolidate 使用的重要性阈值",
+                },
+                "strategy": {
+                    "type": "string",
+                    "description": "forget 策略：importance / importance_ttl / session",
+                },
+                "older_than_days": {
+                    "type": "integer",
+                    "description": "importance_ttl 策略下的天数阈值",
                 },
             },
             "required": ["action"],
@@ -351,17 +362,27 @@ class MemoryTool(Tool):
     def _forget_memory(
         self,
         memory_type: str = "working",
-        importance_threshold: float = 0.2,
+        importance_threshold: float | None = None,
+        strategy: str = "importance",
+        older_than_days: int | None = None,
+        limit: int | None = None,
         **kwargs: Any,
     ) -> str:
         _ = kwargs
         try:
             removed = self.memory_manager.forget_memories(
                 memory_type,
+                strategy=strategy,
                 session_id=self.current_session_id,
                 importance_threshold=importance_threshold,
+                older_than_days=older_than_days,
+                limit=limit,
             )
-            return f"✅ 已遗忘 {removed} 条 {memory_type} 记忆（阈值 <= {importance_threshold}）"
+            threshold = importance_threshold if importance_threshold is not None else "默认"
+            return (
+                f"✅ 已遗忘 {removed} 条 {memory_type} 记忆"
+                f"（strategy={strategy}, 阈值 <= {threshold}）"
+            )
         except Exception as exc:
             return f"❌ 遗忘失败: {exc}"
 

@@ -64,6 +64,7 @@ class EpisodicMemory:
                 vector=vector,
                 collection_name=self._vectors.collection_name,
                 max_attempts=self.config.vector_outbox_max_attempts,
+                embedding_model=self.config.embed_model_name,
             )
             return event.id
 
@@ -119,6 +120,7 @@ class EpisodicMemory:
                 vector=vector,
                 collection_name=self._vectors.collection_name,
                 max_attempts=self.config.vector_outbox_max_attempts,
+                embedding_model=self.config.embed_model_name,
             )
             return memory_id
 

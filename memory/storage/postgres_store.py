@@ -59,6 +59,15 @@ class EpisodicMemoryStore(Protocol):
     ) -> list[EpisodicEvent]:
         ...
 
+    def list_for_forget(
+        self,
+        user_id: str,
+        *,
+        session_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[EpisodicEvent]:
+        ...
+
     def delete(self, memory_id: str) -> None:
         ...
 
@@ -91,6 +100,12 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
 
 CREATE INDEX IF NOT EXISTS idx_episodic_user_session_seq
     ON episodic_memories (user_id, session_id, sequence_no);
+
+ALTER TABLE episodic_memories
+    ADD COLUMN IF NOT EXISTS vector_indexed_at TIMESTAMPTZ;
+
+ALTER TABLE episodic_memories
+    ADD COLUMN IF NOT EXISTS embedding_model TEXT;
 """
 
 
@@ -120,6 +135,7 @@ class PostgresEpisodicMemoryStore:
         vector: list[float],
         collection_name: str,
         max_attempts: int,
+        embedding_model: str | None = None,
         session_id: str | None = None,
         occurred_at: datetime | None = None,
         memory_id: str | None = None,
@@ -135,9 +151,10 @@ class PostgresEpisodicMemoryStore:
             row = conn.execute(
                 """
                 INSERT INTO episodic_memories (
-                    id, user_id, session_id, content, importance, occurred_at, metadata
+                    id, user_id, session_id, content, importance,
+                    occurred_at, metadata, embedding_model
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, user_id, session_id, content, importance,
                           occurred_at, created_at, sequence_no, metadata
                 """,
@@ -149,6 +166,7 @@ class PostgresEpisodicMemoryStore:
                     importance,
                     occurred,
                     Jsonb(meta),
+                    embedding_model,
                 ),
             ).fetchone()
             conn.execute(
@@ -197,6 +215,7 @@ class PostgresEpisodicMemoryStore:
         vector: list[float],
         collection_name: str,
         max_attempts: int,
+        embedding_model: str | None = None,
         session_id: str | None = None,
     ) -> EpisodicEvent:
         """在同一事务内更新情景记忆并登记 Milvus outbox（保留 id / sequence_no）。"""
@@ -211,7 +230,8 @@ class PostgresEpisodicMemoryStore:
                 SET content = %s,
                     importance = %s,
                     session_id = %s,
-                    metadata = %s
+                    metadata = %s,
+                    embedding_model = %s
                 WHERE id = %s AND user_id = %s
                 RETURNING id, user_id, session_id, content, importance,
                           occurred_at, created_at, sequence_no, metadata
@@ -221,6 +241,7 @@ class PostgresEpisodicMemoryStore:
                     importance,
                     session_id,
                     Jsonb(meta),
+                    embedding_model,
                     memory_id,
                     user_id,
                 ),
@@ -412,11 +433,66 @@ class PostgresEpisodicMemoryStore:
         events.reverse()
         return events
 
+    def list_for_forget(
+        self,
+        user_id: str,
+        *,
+        session_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[EpisodicEvent]:
+        return self.list_timeline(user_id, session_id=session_id, limit=limit)
+
+    def list_stale_embeddings(
+        self,
+        *,
+        embedding_model: str,
+        limit: int = 100,
+    ) -> list[EpisodicEvent]:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, session_id, content, importance,
+                       occurred_at, created_at, sequence_no, metadata
+                FROM episodic_memories
+                WHERE embedding_model IS DISTINCT FROM %s
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (embedding_model, limit),
+            ).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def delete(self, memory_id: str) -> None:
         self.ensure_schema()
         with psycopg.connect(self._database_url) as conn:
             conn.execute("DELETE FROM episodic_memories WHERE id = %s", (memory_id,))
             conn.commit()
+
+    def mark_vector_indexed(self, memory_id: str) -> None:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url) as conn:
+            conn.execute(
+                """
+                UPDATE episodic_memories
+                SET vector_indexed_at = now()
+                WHERE id = %s
+                """,
+                (memory_id,),
+            )
+            conn.commit()
+
+    def count_unindexed_vectors(self) -> int:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT count(*) AS total
+                FROM episodic_memories
+                WHERE vector_indexed_at IS NULL
+                """,
+            ).fetchone()
+        return int(row["total"]) if row else 0
 
 
 def create_episodic_store(config: MemoryConfig) -> PostgresEpisodicMemoryStore:

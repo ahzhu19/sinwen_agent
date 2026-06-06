@@ -102,6 +102,12 @@ class PostgresVectorOutboxStore(Protocol):
     def mark_failed(self, entry_id: int, error: str, *, max_attempts: int) -> None:
         ...
 
+    def reclaim_stale_processing(self, *, timeout_seconds: int) -> int:
+        ...
+
+    def replay_dead(self, *, batch_size: int = 20, memory_kind: str | None = None) -> int:
+        ...
+
 
 class PostgresVectorOutboxStoreImpl:
     """Postgres outbox 实现。"""
@@ -315,6 +321,70 @@ class PostgresVectorOutboxStoreImpl:
             ).fetchone()
             conn.commit()
         _ = row
+
+    def reclaim_stale_processing(self, *, timeout_seconds: int) -> int:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                UPDATE memory_vector_outbox
+                SET status = 'pending',
+                    updated_at = now(),
+                    last_error = coalesce(last_error, '') || ' [reclaimed stale processing]'
+                WHERE status = 'processing'
+                  AND updated_at < now() - (%s * interval '1 second')
+                """,
+                (timeout_seconds,),
+            )
+            conn.commit()
+            return row.rowcount or 0
+
+    def replay_dead(
+        self,
+        *,
+        batch_size: int = 20,
+        memory_kind: str | None = None,
+    ) -> int:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            if memory_kind is None:
+                row = conn.execute(
+                    """
+                    UPDATE memory_vector_outbox AS o
+                    SET status = 'pending',
+                        attempts = 0,
+                        next_retry_at = now(),
+                        updated_at = now(),
+                        last_error = NULL
+                    WHERE o.id IN (
+                        SELECT id FROM memory_vector_outbox
+                        WHERE status = 'dead'
+                        ORDER BY updated_at ASC
+                        LIMIT %s
+                    )
+                    """,
+                    (batch_size,),
+                )
+            else:
+                row = conn.execute(
+                    """
+                    UPDATE memory_vector_outbox AS o
+                    SET status = 'pending',
+                        attempts = 0,
+                        next_retry_at = now(),
+                        updated_at = now(),
+                        last_error = NULL
+                    WHERE o.id IN (
+                        SELECT id FROM memory_vector_outbox
+                        WHERE status = 'dead' AND memory_kind = %s
+                        ORDER BY updated_at ASC
+                        LIMIT %s
+                    )
+                    """,
+                    (memory_kind, batch_size),
+                )
+            conn.commit()
+            return row.rowcount or 0
 
 
 def create_postgres_outbox_store(config: MemoryConfig) -> PostgresVectorOutboxStoreImpl:

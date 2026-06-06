@@ -2,10 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
+
+from .collection_names import resolve_collection_name
+
+DEFAULT_SEMANTIC_GRAPH_RELATION_WEIGHTS: dict[str, float] = {
+    "RELATES_TO": 1.0,
+    "CO_OCCURRENCE": 0.75,
+}
+
+
+def _parse_relation_weights(raw: str | None) -> dict[str, float]:
+    if not raw:
+        return dict(DEFAULT_SEMANTIC_GRAPH_RELATION_WEIGHTS)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"SEMANTIC_GRAPH_RELATION_WEIGHTS JSON 无效: {raw}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("SEMANTIC_GRAPH_RELATION_WEIGHTS 必须是 JSON object")
+    return {str(key): float(value) for key, value in parsed.items()}
 
 
 @dataclass(frozen=True)
@@ -45,6 +65,7 @@ class MemoryConfig:
     vector_outbox_max_attempts: int = 5
     vector_outbox_poll_on_read: bool = True
     vector_outbox_worker_batch_size: int = 20
+    vector_outbox_processing_timeout_seconds: int = 900
 
     concept_extraction_max_concepts: int = 8
     llm_model_id: str = "gpt-4o-mini"
@@ -54,8 +75,46 @@ class MemoryConfig:
     semantic_graph_max_hops: int = 2
     semantic_graph_hop_decay: float = 0.65
     semantic_graph_expansion_limit: int = 20
+    semantic_graph_relation_weights: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_SEMANTIC_GRAPH_RELATION_WEIGHTS)
+    )
+    semantic_rrf_k: int = 60
 
     semantic_read_your_writes_limit: int = 20
+
+    use_versioned_milvus_collections: bool = True
+
+    def episodic_milvus_collection(self) -> str:
+        return resolve_collection_name(
+            self.milvus_collection,
+            embed_model=self.embed_model_name,
+            vector_size=self.milvus_vector_size,
+            use_versioned=self.use_versioned_milvus_collections,
+        )
+
+    def semantic_milvus_collection(self) -> str:
+        return resolve_collection_name(
+            self.milvus_semantic_collection,
+            embed_model=self.embed_model_name,
+            vector_size=self.milvus_vector_size,
+            use_versioned=self.use_versioned_milvus_collections,
+        )
+
+    def perceptual_milvus_collection(self, modality: str) -> str:
+        base_by_modality = {
+            "text": self.milvus_perceptual_text_collection,
+            "image": self.milvus_perceptual_image_collection,
+            "audio": self.milvus_perceptual_audio_collection,
+            "video": self.milvus_perceptual_video_collection,
+            "file": self.milvus_perceptual_file_collection,
+        }
+        base = base_by_modality.get(modality, self.milvus_perceptual_text_collection)
+        return resolve_collection_name(
+            base,
+            embed_model=self.embed_model_name,
+            vector_size=self.milvus_vector_size,
+            use_versioned=self.use_versioned_milvus_collections,
+        )
 
     @classmethod
     def from_env(cls) -> MemoryConfig:
@@ -137,6 +196,9 @@ class MemoryConfig:
             vector_outbox_worker_batch_size=int(
                 os.getenv("VECTOR_OUTBOX_WORKER_BATCH_SIZE", "20")
             ),
+            vector_outbox_processing_timeout_seconds=int(
+                os.getenv("VECTOR_OUTBOX_PROCESSING_TIMEOUT_SECONDS", "900")
+            ),
             concept_extraction_max_concepts=int(
                 os.getenv("CONCEPT_EXTRACTION_MAX_CONCEPTS", "8")
             ),
@@ -148,7 +210,16 @@ class MemoryConfig:
             semantic_graph_expansion_limit=int(
                 os.getenv("SEMANTIC_GRAPH_EXPANSION_LIMIT", "20")
             ),
+            semantic_graph_relation_weights=_parse_relation_weights(
+                os.getenv("SEMANTIC_GRAPH_RELATION_WEIGHTS")
+            ),
+            semantic_rrf_k=int(os.getenv("SEMANTIC_RRF_K", "60")),
             semantic_read_your_writes_limit=int(
                 os.getenv("SEMANTIC_READ_YOUR_WRITES_LIMIT", "20")
             ),
+            use_versioned_milvus_collections=os.getenv(
+                "USE_VERSIONED_MILVUS_COLLECTIONS",
+                "true",
+            ).lower()
+            in {"1", "true", "yes"},
         )

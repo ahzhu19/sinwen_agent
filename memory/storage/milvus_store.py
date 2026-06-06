@@ -8,6 +8,7 @@ from typing import Protocol
 from pymilvus import MilvusClient
 
 from ..config import MemoryConfig
+from ..milvus_guard import validate_collection_dimension
 
 
 @dataclass(frozen=True)
@@ -75,9 +76,10 @@ class MilvusEpisodicVectorStore:
         return self._client
 
     def ensure_collection(self, vector_size: int) -> None:
+        client = self._get_client()
+        validate_collection_dimension(client, self._collection_name, vector_size)
         if self._collection_ready:
             return
-        client = self._get_client()
         if not client.has_collection(self._collection_name):
             client.create_collection(
                 collection_name=self._collection_name,
@@ -167,9 +169,12 @@ def create_vector_store(
     config: MemoryConfig,
     collection_name: str | None = None,
 ) -> MilvusEpisodicVectorStore:
+    resolved = collection_name
+    if resolved is None:
+        resolved = config.episodic_milvus_collection()
     return MilvusEpisodicVectorStore(
         uri=config.milvus_uri,
-        collection_name=collection_name or config.milvus_collection,
+        collection_name=resolved,
         metric_type=config.milvus_metric_type,
         timeout=config.milvus_timeout,
     )

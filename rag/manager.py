@@ -15,6 +15,7 @@ from .generator import RagGenerator
 from .ingestion import RagIngestionService
 from .models import INGESTION_INDEXED, RagAnswer, RagDocument, RagSearchResult
 from .retriever import RagRetriever
+from .outbox_store import create_rag_outbox_store
 from .storage import RagStore, create_rag_store
 from .vector_store import MilvusRagVectorStore, RagVectorStore
 
@@ -48,6 +49,24 @@ class RagManager:
             MemoryConfig.from_env()
         )
         self.llm = llm or BaseLLM()
+        self._vector_outbox = (
+            create_rag_outbox_store(self.config)
+            if self.config.enable_rag_vector_outbox and self.config.database_url
+            else None
+        )
+
+    def _ingestion_service(self) -> RagIngestionService:
+        return RagIngestionService(
+            converter=self.converter,
+            chunker=self.chunker,
+            store=self.store,
+            vector_store=self.vector_store,
+            embedding_provider=self.embedding_provider,
+            vector_outbox=self._vector_outbox,
+            collection_name=self.config.collection_name,
+            enable_vector_outbox=self.config.enable_rag_vector_outbox,
+            vector_outbox_max_attempts=self.config.rag_vector_outbox_max_attempts,
+        )
 
     def _retriever(self) -> RagRetriever:
         return RagRetriever(
@@ -63,13 +82,7 @@ class RagManager:
         source_type: str = "file",
         metadata: dict[str, Any] | None = None,
     ) -> RagDocument:
-        service = RagIngestionService(
-            converter=self.converter,
-            chunker=self.chunker,
-            store=self.store,
-            vector_store=self.vector_store,
-            embedding_provider=self.embedding_provider,
-        )
+        service = self._ingestion_service()
         return service.ingest(source=source, source_type=source_type, metadata=metadata)
 
     def search(

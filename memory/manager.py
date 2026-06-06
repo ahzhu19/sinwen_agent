@@ -22,6 +22,12 @@ from .storage.postgres_outbox_store import (
 )
 from .storage.postgres_store import EpisodicMemoryStore, create_episodic_store
 from .concept_extractor import ConceptExtractor
+from .forget_policy import (
+    default_forget_limit,
+    default_forget_threshold,
+    parse_occurred_at,
+    should_forget_record,
+)
 from .semantic_outbox_processor import SemanticOutboxProcessor
 from .storage.vector_outbox import VectorOutbox
 from .vector_outbox_processor import VectorOutboxProcessor
@@ -100,6 +106,12 @@ class MemoryManager:
                 embedding_provider=perceptual_embedding_provider,
             )
 
+        if self._outbox_processor is not None and "episodic" in self.memory_modules:
+            episodic_module = self.memory_modules["episodic"]
+            store = getattr(episodic_module, "_store", None)
+            if store is not None and hasattr(store, "mark_vector_indexed"):
+                self._outbox_processor._episodic_store = store
+
     def _create_episodic_memory(
         self,
         episodic_store: EpisodicMemoryStore | None,
@@ -129,7 +141,7 @@ class MemoryManager:
         store = semantic_store or create_semantic_store(self.config)
         vectors = vector_store or create_vector_store(
             self.config,
-            collection_name=self.config.milvus_semantic_collection,
+            collection_name=self.config.semantic_milvus_collection(),
         )
         embeddings = embedding_provider or create_embedding_provider(self.config)
         if not hasattr(store, "claim_pending_outbox_events"):
@@ -160,23 +172,23 @@ class MemoryManager:
         vectors = vector_stores or {
             "text": create_vector_store(
                 self.config,
-                collection_name=self.config.milvus_perceptual_text_collection,
+                collection_name=self.config.perceptual_milvus_collection("text"),
             ),
             "image": create_vector_store(
                 self.config,
-                collection_name=self.config.milvus_perceptual_image_collection,
+                collection_name=self.config.perceptual_milvus_collection("image"),
             ),
             "audio": create_vector_store(
                 self.config,
-                collection_name=self.config.milvus_perceptual_audio_collection,
+                collection_name=self.config.perceptual_milvus_collection("audio"),
             ),
             "video": create_vector_store(
                 self.config,
-                collection_name=self.config.milvus_perceptual_video_collection,
+                collection_name=self.config.perceptual_milvus_collection("video"),
             ),
             "file": create_vector_store(
                 self.config,
-                collection_name=self.config.milvus_perceptual_file_collection,
+                collection_name=self.config.perceptual_milvus_collection("file"),
             ),
         }
         embeddings = embedding_provider or create_embedding_provider(self.config)
@@ -380,21 +392,92 @@ class MemoryManager:
         self,
         memory_type: str = "working",
         *,
+        strategy: str = "importance",
         session_id: str | None = None,
-        importance_threshold: float = 0.2,
+        importance_threshold: float | None = None,
+        older_than_days: int | None = None,
+        limit: int | None = None,
     ) -> int:
         memory_module = self.memory_modules.get(memory_type)
         if memory_module is None:
             raise ValueError(f"未启用记忆类型: {memory_type}")
 
-        removed = 0
+        threshold = (
+            importance_threshold
+            if importance_threshold is not None
+            else default_forget_threshold(memory_type)
+        )
+        max_remove = limit if limit is not None else default_forget_limit(memory_type)
+
         if memory_type == "working":
             memory_module.cleanup_expired()
+            removed = 0
             for record in list(memory_module.store.list_records(memory_type="working")):
+                if removed >= max_remove:
+                    break
                 if session_id and record.metadata.get("session_id") != session_id:
                     continue
-                if record.importance <= importance_threshold:
+                if should_forget_record(
+                    importance=record.importance,
+                    importance_threshold=threshold,
+                    strategy=strategy,
+                ):
                     memory_module.remove(record.id)
+                    removed += 1
+            return removed
+
+        if memory_type == "episodic":
+            store = memory_module._store
+            if not hasattr(store, "list_for_forget"):
+                raise ValueError("episodic store 需实现 list_for_forget")
+            removed = 0
+            for event in store.list_for_forget(self.user_id, session_id=session_id, limit=10_000):
+                if removed >= max_remove:
+                    break
+                if should_forget_record(
+                    importance=event.importance,
+                    importance_threshold=threshold,
+                    strategy=strategy,
+                    occurred_at=event.occurred_at,
+                    older_than_days=older_than_days,
+                ):
+                    memory_module.remove(event.id)
+                    removed += 1
+            return removed
+
+        if memory_type == "semantic":
+            removed = 0
+            facts = memory_module.list_for_user(session_id=session_id, limit=10_000)
+            for record in facts:
+                if removed >= max_remove:
+                    break
+                if should_forget_record(
+                    importance=record.importance,
+                    importance_threshold=threshold,
+                    strategy=strategy,
+                    occurred_at=parse_occurred_at(record),
+                    older_than_days=older_than_days,
+                ):
+                    memory_module.remove(record.id)
+                    removed += 1
+            return removed
+
+        if memory_type == "perceptual":
+            store = memory_module._store
+            if not hasattr(store, "list_by_user"):
+                raise ValueError("perceptual store 需实现 list_by_user")
+            removed = 0
+            for item in store.list_by_user(self.user_id, session_id=session_id, limit=10_000):
+                if removed >= max_remove:
+                    break
+                if should_forget_record(
+                    importance=item.importance,
+                    importance_threshold=threshold,
+                    strategy=strategy,
+                    occurred_at=parse_occurred_at(item),
+                    older_than_days=older_than_days,
+                ):
+                    memory_module.remove(item.id)
                     removed += 1
             return removed
 

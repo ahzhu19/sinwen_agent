@@ -234,12 +234,31 @@ class FakeSemanticStore:
         query_concepts: list[str],
         memory_ids: list[str],
     ) -> dict[str, float]:
-        _ = user_id
-        _ = query_concepts
-        return {
-            memory_id: self.graph_scores.get(memory_id, 0.0)
-            for memory_id in memory_ids
-        }
+        _ = user_id, query_concepts
+        scores = self.compute_graph_relevance(
+            user_id,
+            query_concepts,
+            max_hops=1,
+        )
+        return {memory_id: scores.get(memory_id, 0.0) for memory_id in memory_ids}
+
+    def compute_graph_relevance(
+        self,
+        user_id: str,
+        query_concepts: list[str],
+        *,
+        max_hops: int = 2,
+        hop_decay: float = 0.65,
+        relation_weights: dict[str, float] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, float]:
+        _ = user_id, query_concepts, max_hops, hop_decay, relation_weights, session_id
+        scores: dict[str, float] = {}
+        for memory_id, score in self.graph_scores.items():
+            scores[memory_id] = max(scores.get(memory_id, 0.0), score)
+        for memory_id, score in self.expanded_scores.items():
+            scores[memory_id] = max(scores.get(memory_id, 0.0), score)
+        return scores
 
     def expand_graph_candidates(
         self,

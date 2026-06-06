@@ -24,9 +24,14 @@ class SemanticOutboxProcessor:
         self._embeddings = embedding_provider
         self._vectors = vector_store
 
-    def process_batch(self, *, batch_size: int = 20) -> tuple[int, int]:
+    def process_batch(self, *, batch_size: int = 20, reclaim_stale: bool = True) -> tuple[int, int]:
         if not hasattr(self._store, "claim_pending_outbox_events"):
             return 0, 0
+
+        if reclaim_stale and hasattr(self._store, "reclaim_stale_processing_outbox"):
+            self._store.reclaim_stale_processing_outbox(
+                timeout_seconds=self._config.vector_outbox_processing_timeout_seconds,
+            )
 
         events = self._store.claim_pending_outbox_events(batch_size=batch_size)
         succeeded = 0

@@ -43,6 +43,18 @@ class SemanticMemoryStore(Protocol):
     ) -> dict[str, float]:
         ...
 
+    def compute_graph_relevance(
+        self,
+        user_id: str,
+        query_concepts: list[str],
+        *,
+        max_hops: int = 2,
+        hop_decay: float = 0.65,
+        relation_weights: dict[str, float] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, float]:
+        ...
+
     def list_by_user(
         self,
         user_id: str,
@@ -133,6 +145,21 @@ class SemanticMemoryStore(Protocol):
     def outbox_status_counts(self) -> dict[str, int]:
         ...
 
+    def reclaim_stale_processing_outbox(self, *, timeout_seconds: int) -> int:
+        ...
+
+    def replay_dead_outbox(self, *, batch_size: int = 20) -> int:
+        ...
+
+    def ensure_pending_outbox_events(
+        self,
+        *,
+        batch_size: int = 20,
+        max_attempts: int = 5,
+        collection_name: str,
+    ) -> int:
+        ...
+
 
 class Neo4jSemanticMemoryStore:
     """Neo4j 图存储实现。"""
@@ -198,28 +225,108 @@ class Neo4jSemanticMemoryStore:
         query_concepts: list[str],
         memory_ids: list[str],
     ) -> dict[str, float]:
+        scores = self.compute_graph_relevance(
+            user_id,
+            query_concepts,
+            max_hops=1,
+            session_id=None,
+        )
+        return {memory_id: scores.get(memory_id, 0.0) for memory_id in memory_ids}
+
+    def compute_graph_relevance(
+        self,
+        user_id: str,
+        query_concepts: list[str],
+        *,
+        max_hops: int = 2,
+        hop_decay: float = 0.65,
+        relation_weights: dict[str, float] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, float]:
         concepts = _normalize_concepts(query_concepts)
-        if not concepts or not memory_ids:
-            return {memory_id: 0.0 for memory_id in memory_ids}
+        if not concepts:
+            return {}
+
+        weights = relation_weights or {
+            "RELATES_TO": 1.0,
+            "CO_OCCURRENCE": 0.75,
+        }
+        relates_weight = float(weights.get("RELATES_TO", 1.0))
+        cooc_weight = float(weights.get("CO_OCCURRENCE", 0.75))
+
         self.ensure_schema()
+        scores: dict[str, float] = {}
+        denominator = len(concepts)
+
         with self._driver.session(database=self._database) as session:
-            rows = session.run(
+            hop1_rows = session.run(
                 """
-                MATCH (m:SemanticMemory)-[:MENTIONS]->(c:Concept)
-                WHERE m.user_id = $user_id AND m.id IN $memory_ids AND c.name IN $concepts
-                  AND coalesce(m.deleted, false) = false
+                MATCH (m:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(c:Concept)
+                WHERE c.name IN $concepts AND coalesce(m.deleted, false) = false
                 RETURN m.id AS id, count(DISTINCT c.name) AS matches
                 """,
-                {
-                    "user_id": user_id,
-                    "memory_ids": memory_ids,
-                    "concepts": concepts,
-                },
+                {"user_id": user_id, "concepts": concepts},
             ).data()
-        scores = {memory_id: 0.0 for memory_id in memory_ids}
-        denominator = len(concepts)
-        for row in rows:
-            scores[str(row["id"])] = min(1.0, float(row["matches"]) / denominator)
+
+        for row in hop1_rows:
+            memory_id = str(row["id"])
+            hop_score = min(1.0, float(row["matches"]) / denominator)
+            scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
+
+        if max_hops >= 2:
+            hop2_weight = hop_decay**1
+            with self._driver.session(database=self._database) as session:
+                hop2_rows = session.run(
+                    """
+                    MATCH (qc:Concept)
+                    WHERE qc.name IN $concepts
+                    MATCH (qc)-[r:RELATES_TO]-(bridge:Concept)
+                    MATCH (m:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(bridge)
+                    WHERE coalesce(m.deleted, false) = false
+                    RETURN m.id AS id,
+                           count(DISTINCT bridge.name) AS bridges,
+                           avg(coalesce(r.weight, 1.0)) AS relation_weight
+                    """,
+                    {"user_id": user_id, "concepts": concepts},
+                ).data()
+
+                bridge_rows = session.run(
+                    """
+                    MATCH (m0:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(qc:Concept)
+                    WHERE qc.name IN $concepts AND coalesce(m0.deleted, false) = false
+                    MATCH (m0)-[:MENTIONS]->(bridge:Concept)
+                    MATCH (m1:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(bridge)
+                    WHERE m1.id <> m0.id AND coalesce(m1.deleted, false) = false
+                    RETURN m1.id AS id, count(DISTINCT bridge.name) AS bridges
+                    """,
+                    {"user_id": user_id, "concepts": concepts},
+                ).data()
+
+            for row in hop2_rows:
+                memory_id = str(row["id"])
+                bridges = float(row.get("bridges") or 0)
+                relation_weight = float(row.get("relation_weight") or 1.0)
+                hop_score = (
+                    min(1.0, bridges / max(1.0, denominator))
+                    * relation_weight
+                    * relates_weight
+                    * hop2_weight
+                )
+                scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
+
+            for row in bridge_rows:
+                memory_id = str(row["id"])
+                bridges = float(row.get("bridges") or 0)
+                hop_score = (
+                    min(1.0, bridges / max(1.0, denominator))
+                    * cooc_weight
+                    * hop2_weight
+                )
+                scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
+
+        if session_id is not None:
+            scores = self._filter_scores_by_session(user_id, scores, session_id)
+
         return scores
 
     def expand_graph_candidates(
@@ -231,74 +338,16 @@ class Neo4jSemanticMemoryStore:
         hop_decay: float = 0.65,
         limit: int = 20,
         session_id: str | None = None,
+        relation_weights: dict[str, float] | None = None,
     ) -> dict[str, float]:
-        concepts = _normalize_concepts(query_concepts)
-        if not concepts:
-            return {}
-        self.ensure_schema()
-        scores: dict[str, float] = {}
-        with self._driver.session(database=self._database) as session:
-            hop1_rows = session.run(
-                """
-                MATCH (m:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(c:Concept)
-                WHERE c.name IN $concepts AND coalesce(m.deleted, false) = false
-                RETURN m.id AS id, count(DISTINCT c.name) AS matches
-                """,
-                {"user_id": user_id, "concepts": concepts},
-            ).data()
-        denominator = len(concepts)
-        for row in hop1_rows:
-            memory_id = str(row["id"])
-            hop_score = min(1.0, float(row["matches"]) / denominator)
-            scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
-
-        if max_hops < 2:
-            return _top_graph_scores(scores, limit)
-
-        with self._driver.session(database=self._database) as session:
-            hop2_rows = session.run(
-                """
-                MATCH (qc:Concept)
-                WHERE qc.name IN $concepts
-                MATCH (qc)-[r:RELATES_TO]-(bridge:Concept)
-                MATCH (m:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(bridge)
-                WHERE coalesce(m.deleted, false) = false
-                RETURN m.id AS id,
-                       count(DISTINCT bridge.name) AS bridges,
-                       avg(coalesce(r.weight, 1.0)) AS relation_weight
-                """,
-                {"user_id": user_id, "concepts": concepts},
-            ).data()
-
-            bridge_rows = session.run(
-                """
-                MATCH (m0:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(qc:Concept)
-                WHERE qc.name IN $concepts AND coalesce(m0.deleted, false) = false
-                MATCH (m0)-[:MENTIONS]->(bridge:Concept)
-                MATCH (m1:SemanticMemory {user_id: $user_id})-[:MENTIONS]->(bridge)
-                WHERE m1.id <> m0.id AND coalesce(m1.deleted, false) = false
-                RETURN m1.id AS id, count(DISTINCT bridge.name) AS bridges
-                """,
-                {"user_id": user_id, "concepts": concepts},
-            ).data()
-
-        hop2_weight = hop_decay**1
-        for row in hop2_rows:
-            memory_id = str(row["id"])
-            bridges = float(row.get("bridges") or 0)
-            relation_weight = float(row.get("relation_weight") or 1.0)
-            hop_score = min(1.0, bridges / max(1.0, denominator)) * relation_weight * hop2_weight
-            scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
-
-        for row in bridge_rows:
-            memory_id = str(row["id"])
-            bridges = float(row.get("bridges") or 0)
-            hop_score = min(1.0, bridges / max(1.0, denominator)) * hop2_weight
-            scores[memory_id] = max(scores.get(memory_id, 0.0), hop_score)
-
-        if session_id is not None:
-            scores = self._filter_scores_by_session(user_id, scores, session_id)
-
+        scores = self.compute_graph_relevance(
+            user_id,
+            query_concepts,
+            max_hops=max_hops,
+            hop_decay=hop_decay,
+            relation_weights=relation_weights,
+            session_id=session_id,
+        )
         return _top_graph_scores(scores, limit)
 
     def _filter_scores_by_session(
@@ -629,6 +678,118 @@ class Neo4jSemanticMemoryStore:
             if status in counts:
                 counts[status] = int(row["total"])
         return counts
+
+    def reclaim_stale_processing_outbox(self, *, timeout_seconds: int) -> int:
+        self.ensure_schema()
+        timeout_ms = timeout_seconds * 1000
+        with self._driver.session(database=self._database) as session:
+            result = session.run(
+                """
+                MATCH (e:SemanticOutboxEvent)
+                WHERE e.status = 'processing'
+                  AND e.updated_at < timestamp() - $timeout_ms
+                SET e.status = 'pending',
+                    e.last_error = coalesce(e.last_error, '') + ' [reclaimed stale processing]'
+                RETURN count(e) AS total
+                """,
+                {"timeout_ms": timeout_ms},
+            ).single()
+        return int(result["total"]) if result else 0
+
+    def replay_dead_outbox(self, *, batch_size: int = 20) -> int:
+        self.ensure_schema()
+        with self._driver.session(database=self._database) as session:
+            result = session.run(
+                """
+                MATCH (e:SemanticOutboxEvent)
+                WHERE e.status = 'dead'
+                WITH e ORDER BY e.updated_at ASC LIMIT $batch_size
+                SET e.status = 'pending',
+                    e.attempts = 0,
+                    e.last_error = null,
+                    e.updated_at = timestamp()
+                RETURN count(e) AS total
+                """,
+                {"batch_size": batch_size},
+            ).single()
+        return int(result["total"]) if result else 0
+
+    def ensure_pending_outbox_events(
+        self,
+        *,
+        batch_size: int = 20,
+        max_attempts: int = 5,
+        collection_name: str,
+    ) -> int:
+        """为 embedding 未同步且无活跃 outbox 的语义记忆补建 pending 事件。"""
+        self.ensure_schema()
+        created = 0
+        with self._driver.session(database=self._database) as session:
+            rows = session.run(
+                """
+                MATCH (m:SemanticMemory)
+                WHERE coalesce(m.deleted, false) = false
+                  AND (
+                    m.embedding_status = 'pending'
+                    OR coalesce(m.embedding_version, 0) < coalesce(m.version, 1)
+                  )
+                OPTIONAL MATCH (e:SemanticOutboxEvent {memory_id: m.id})
+                WHERE e.status IN ['pending', 'processing']
+                  AND e.version = coalesce(m.version, 1)
+                WITH m WHERE e IS NULL
+                RETURN m.id AS memory_id,
+                       m.user_id AS user_id,
+                       coalesce(m.version, 1) AS version,
+                       coalesce(m.embedding_model, '') AS embedding_model,
+                       m.metadata_json AS metadata_json
+                ORDER BY m.updated_at ASC
+                LIMIT $batch_size
+                """,
+                {"batch_size": batch_size},
+            ).data()
+
+            for row in rows:
+                metadata_json = row.get("metadata_json") or "{}"
+                if isinstance(metadata_json, str):
+                    metadata = json.loads(metadata_json) if metadata_json else {}
+                else:
+                    metadata = {}
+                session_id = metadata.get("session_id")
+                session_value = session_id if isinstance(session_id, str) else None
+                event_id = str(uuid4())
+                session.run(
+                    """
+                    MATCH (m:SemanticMemory {id: $memory_id})
+                    CREATE (e:SemanticOutboxEvent {
+                        id: $event_id,
+                        memory_id: $memory_id,
+                        user_id: $user_id,
+                        version: $version,
+                        operation: 'update',
+                        status: 'pending',
+                        attempts: 0,
+                        max_attempts: $max_attempts,
+                        embedding_model: $embedding_model,
+                        collection_name: $collection_name,
+                        session_id: $session_id,
+                        created_at: timestamp(),
+                        updated_at: timestamp()
+                    })
+                    MERGE (m)-[:HAS_OUTBOX_EVENT]->(e)
+                    """,
+                    {
+                        "event_id": event_id,
+                        "memory_id": row["memory_id"],
+                        "user_id": row["user_id"],
+                        "version": int(row["version"]),
+                        "max_attempts": max_attempts,
+                        "embedding_model": row["embedding_model"],
+                        "collection_name": collection_name,
+                        "session_id": session_value,
+                    },
+                )
+                created += 1
+        return created
 
     def count_by_user(self, user_id: str, session_id: str | None = None) -> int:
         if session_id is None:

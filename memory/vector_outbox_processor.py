@@ -18,18 +18,26 @@ class VectorOutboxProcessor:
         outbox_store: PostgresVectorOutboxStore,
         *,
         vector_stores_by_collection: dict[str, Any] | None = None,
+        episodic_store: Any | None = None,
     ) -> None:
         self._config = config
         self._outbox = outbox_store
         self._vector_stores = vector_stores_by_collection or _default_vector_stores(config)
+        self._episodic_store = episodic_store
 
     def process_batch(
         self,
         *,
         batch_size: int = 20,
         memory_kind: str | None = None,
+        reclaim_stale: bool = True,
     ) -> tuple[int, int]:
         """返回 (成功数, 失败数)。"""
+        if reclaim_stale and hasattr(self._outbox, "reclaim_stale_processing"):
+            self._outbox.reclaim_stale_processing(
+                timeout_seconds=self._config.vector_outbox_processing_timeout_seconds,
+            )
+
         entries = self._outbox.claim_pending(batch_size=batch_size)
         if memory_kind is not None:
             entries = [entry for entry in entries if entry.memory_kind == memory_kind]
@@ -48,6 +56,13 @@ class VectorOutboxProcessor:
                 failed += 1
                 continue
             self._outbox.mark_done(entry.id)
+            if (
+                entry.memory_kind == "episodic"
+                and entry.op == "upsert"
+                and self._episodic_store is not None
+                and hasattr(self._episodic_store, "mark_vector_indexed")
+            ):
+                self._episodic_store.mark_vector_indexed(entry.memory_id)
             succeeded += 1
         return succeeded, failed
 
@@ -72,26 +87,26 @@ class VectorOutboxProcessor:
 
 def _default_vector_stores(config: MemoryConfig) -> dict[str, Any]:
     episodic = create_vector_store(config)
-    semantic = create_vector_store(config, collection_name=config.milvus_semantic_collection)
+    semantic = create_vector_store(config, collection_name=config.semantic_milvus_collection())
     perceptual_text = create_vector_store(
         config,
-        collection_name=config.milvus_perceptual_text_collection,
+        collection_name=config.perceptual_milvus_collection("text"),
     )
     perceptual_image = create_vector_store(
         config,
-        collection_name=config.milvus_perceptual_image_collection,
+        collection_name=config.perceptual_milvus_collection("image"),
     )
     perceptual_audio = create_vector_store(
         config,
-        collection_name=config.milvus_perceptual_audio_collection,
+        collection_name=config.perceptual_milvus_collection("audio"),
     )
     perceptual_video = create_vector_store(
         config,
-        collection_name=config.milvus_perceptual_video_collection,
+        collection_name=config.perceptual_milvus_collection("video"),
     )
     perceptual_file = create_vector_store(
         config,
-        collection_name=config.milvus_perceptual_file_collection,
+        collection_name=config.perceptual_milvus_collection("file"),
     )
     return {
         episodic.collection_name: episodic,

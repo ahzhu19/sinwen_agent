@@ -19,6 +19,9 @@ class RagConfig:
     target_chunk_tokens: int = 500
     max_chunk_tokens: int = 800
     overlap_tokens: int = 80
+    enable_rag_vector_outbox: bool = True
+    rag_vector_outbox_max_attempts: int = 5
+    rag_vector_outbox_processing_timeout_seconds: int = 900
 
     @classmethod
     def from_env(cls) -> RagConfig:
@@ -44,4 +47,10 @@ class RagConfig:
             target_chunk_tokens=int(os.getenv("RAG_TARGET_CHUNK_TOKENS", "500")),
             max_chunk_tokens=int(os.getenv("RAG_MAX_CHUNK_TOKENS", "800")),
             overlap_tokens=int(os.getenv("RAG_OVERLAP_TOKENS", "80")),
+            enable_rag_vector_outbox=os.getenv("ENABLE_RAG_VECTOR_OUTBOX", "true").lower()
+            in {"1", "true", "yes"},
+            rag_vector_outbox_max_attempts=int(os.getenv("RAG_VECTOR_OUTBOX_MAX_ATTEMPTS", "5")),
+            rag_vector_outbox_processing_timeout_seconds=int(
+                os.getenv("RAG_VECTOR_OUTBOX_PROCESSING_TIMEOUT_SECONDS", "900")
+            ),
         )

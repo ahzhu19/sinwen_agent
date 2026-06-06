@@ -66,6 +66,7 @@ def test_semantic_memory_add_uses_llm_concepts() -> None:
 
 
 def test_semantic_memory_retrieve_uses_vector_graph_and_importance_formula() -> None:
+    """RRF 融合：向量榜 + 图榜；同 importance 时 graph 分更高者靠前。"""
     bundle = create_semantic_bundle()
     memory, _ = create_semantic_memory_with_outbox(
         bundle,
@@ -79,7 +80,7 @@ def test_semantic_memory_retrieve_uses_vector_graph_and_importance_formula() -> 
     )
     react_id = memory.add(
         "用户偏好 React 前端开发",
-        1.0,
+        0.6,
         {"concepts": ["React", "前端"]},
     )
     _flush(memory)

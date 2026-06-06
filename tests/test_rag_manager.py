@@ -1,14 +1,20 @@
 """RAG manager tests."""
 
 from rag.chunker import MarkdownChunker
+from rag.config import RagConfig
 from rag.manager import RagManager
 from rag.storage import InMemoryRagStore
 from tests.rag_fakes import FakeConverter, FakeEmbeddingProvider, FakeLLM, FakeVectorStore
 
 
+def _test_config() -> RagConfig:
+    return RagConfig(enable_rag_vector_outbox=False, database_url=None)
+
+
 def test_rag_manager_ingest_search_and_answer() -> None:
     store = InMemoryRagStore()
     manager = RagManager(
+        config=_test_config(),
         store=store,
         converter=FakeConverter("# Milvus\n\nMilvus stores vector chunks."),
         chunker=MarkdownChunker(target_tokens=20, max_tokens=40, overlap_tokens=5),
@@ -29,6 +35,7 @@ def test_rag_manager_delete_reindex_and_stats() -> None:
     store = InMemoryRagStore()
     vector_store = FakeVectorStore()
     manager = RagManager(
+        config=_test_config(),
         store=store,
         converter=FakeConverter("# Doc\n\nChunk content for stats."),
         chunker=MarkdownChunker(target_tokens=20, max_tokens=40, overlap_tokens=5),
