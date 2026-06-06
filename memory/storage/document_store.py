@@ -41,6 +41,20 @@ class PerceptualMemoryStore(Protocol):
     def delete(self, memory_id: str) -> None:
         ...
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        user_id: str,
+        content: str,
+        modality: str,
+        importance: float,
+        raw_data: str | None,
+        created_at: str,
+        metadata: dict[str, Any],
+    ) -> PerceptualItem:
+        ...
+
 
 class InMemoryPerceptualStore:
     """第一版感知记忆元数据 store，用于本地开发和测试。"""
@@ -59,6 +73,33 @@ class InMemoryPerceptualStore:
         created_at: str,
         metadata: dict[str, Any],
     ) -> PerceptualItem:
+        item = PerceptualItem(
+            id=memory_id,
+            user_id=user_id,
+            content=content,
+            modality=modality,
+            importance=importance,
+            raw_data=raw_data,
+            created_at=created_at,
+            metadata=dict(metadata),
+        )
+        self.items[memory_id] = item
+        return item
+
+    def update(
+        self,
+        memory_id: str,
+        *,
+        user_id: str,
+        content: str,
+        modality: str,
+        importance: float,
+        raw_data: str | None,
+        created_at: str,
+        metadata: dict[str, Any],
+    ) -> PerceptualItem:
+        if memory_id not in self.items:
+            raise KeyError(f"未找到感知记忆: {memory_id}")
         item = PerceptualItem(
             id=memory_id,
             user_id=user_id,

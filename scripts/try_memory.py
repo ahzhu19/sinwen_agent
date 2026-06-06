@@ -4,8 +4,7 @@
 
     uv run python scripts/try_memory.py
 
-它会读取 `.env`，连接本地 Docker 中的 PostgreSQL、Neo4j、Milvus，
-并通过真实 embedding API 写入和检索 working / episodic / semantic / perceptual 记忆。
+默认验证 working / episodic / semantic 三类记忆。Perceptual（experimental）需加 ``--with-perceptual``。
 """
 
 from __future__ import annotations
@@ -55,7 +54,12 @@ def print_records(title: str, records: Iterable[MemoryRecord]) -> None:
             print(f"     metadata={interesting}")
 
 
-def add_sample_memories(manager: MemoryManager, session_id: str) -> dict[str, str]:
+def add_sample_memories(
+    manager: MemoryManager,
+    session_id: str,
+    *,
+    include_perceptual: bool,
+) -> dict[str, str]:
     ids: dict[str, str] = {}
 
     ids["working"] = manager.add_memory(
@@ -83,23 +87,24 @@ def add_sample_memories(manager: MemoryManager, session_id: str) -> dict[str, st
         },
     )
 
-    ids["perceptual"] = manager.add_memory(
-        content="用户上传了一张记忆系统架构图",
-        memory_type="perceptual",
-        importance=0.7,
-        metadata={
-            "session_id": session_id,
-            "source": "try_memory",
-            "modality": "image",
-            "raw_data": "/tmp/memory-architecture.png",
-            "caption": "PostgreSQL Neo4j Milvus 记忆系统架构图",
-        },
-    )
+    if include_perceptual:
+        ids["perceptual"] = manager.add_memory(
+            content="用户上传了一张记忆系统架构图",
+            memory_type="perceptual",
+            importance=0.7,
+            metadata={
+                "session_id": session_id,
+                "source": "try_memory",
+                "modality": "image",
+                "raw_data": "/tmp/memory-architecture.png",
+                "caption": "PostgreSQL Neo4j Milvus 记忆系统架构图",
+            },
+        )
 
     return ids
 
 
-def run_demo(cleanup: bool) -> None:
+def run_demo(*, cleanup: bool, with_perceptual: bool) -> None:
     load_dotenv(_ROOT / ".env")
     config = MemoryConfig.from_env()
 
@@ -120,12 +125,17 @@ def run_demo(cleanup: bool) -> None:
         enable_working=True,
         enable_episodic=True,
         enable_semantic=True,
-        enable_perceptual=True,
+        enable_perceptual=with_perceptual,
     )
 
     session_id = "try_memory_session"
-    print("\n✍️ 写入四类记忆")
-    memory_ids = add_sample_memories(manager, session_id)
+    type_label = "四类" if with_perceptual else "三类"
+    print(f"\n✍️ 写入{type_label}记忆")
+    memory_ids = add_sample_memories(
+        manager,
+        session_id,
+        include_perceptual=with_perceptual,
+    )
     for memory_type, memory_id in memory_ids.items():
         print(f"  ✅ {memory_type}: {memory_id}")
 
@@ -156,15 +166,16 @@ def run_demo(cleanup: bool) -> None:
             session_id=session_id,
         ),
     )
-    print_records(
-        "🔍 PerceptualMemory 检索：架构图",
-        manager.search_memory(
-            query="记忆系统架构图",
-            memory_type="perceptual",
-            limit=3,
-            session_id=session_id,
-        ),
-    )
+    if with_perceptual:
+        print_records(
+            "🔍 PerceptualMemory 检索：架构图",
+            manager.search_memory(
+                query="记忆系统架构图",
+                memory_type="perceptual",
+                limit=3,
+                session_id=session_id,
+            ),
+        )
 
     episodic_module = manager.memory_modules["episodic"]
     print_records(
@@ -179,7 +190,11 @@ def run_demo(cleanup: bool) -> None:
             print(f"  ✅ 已删除 {memory_type}: {memory_id[:8]}")
     else:
         print("\nℹ️ 本次数据保留在真实后端中。若想试完即删，可加参数：--cleanup")
-        print("   注意：PerceptualMemory 的元数据目前仍是进程内存 store，只在本次脚本运行中可检索。")
+        if with_perceptual:
+            print(
+                "   注意：PerceptualMemory 元数据为进程内存 store，"
+                "仅在本次脚本运行中可检索。"
+            )
 
 
 def main() -> None:
@@ -189,10 +204,15 @@ def main() -> None:
         action="store_true",
         help="脚本结束前删除本次写入的记忆",
     )
+    parser.add_argument(
+        "--with-perceptual",
+        action="store_true",
+        help="同时试用 PerceptualMemory（experimental）",
+    )
     args = parser.parse_args()
 
     try:
-        run_demo(cleanup=args.cleanup)
+        run_demo(cleanup=args.cleanup, with_perceptual=args.with_perceptual)
     except Exception as exc:
         print(f"\n❌ 试用失败：{exc}")
         raise SystemExit(1) from exc

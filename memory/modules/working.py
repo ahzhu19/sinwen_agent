@@ -77,6 +77,24 @@ class WorkingMemory(BaseMemory):
             if record.metadata.get("session_id") == session_id:
                 self.store.remove(record.id)
 
+    def remove(self, memory_id: str) -> None:
+        self.store.remove(memory_id)
+
+    def update(
+        self,
+        memory_id: str,
+        *,
+        content: str | None = None,
+        importance: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryRecord | None:
+        return self.store.update(
+            memory_id,
+            content=content,
+            importance=importance,
+            metadata=metadata,
+        )
+
     def cleanup_expired(self) -> None:
         now = time.time()
         for record in self.store.list_records(memory_type=self.memory_type):
@@ -118,12 +136,27 @@ class WorkingMemory(BaseMemory):
         return scores
 
     def _calculate_keyword_score(self, query: str, content: str) -> float:
+        query_stripped = query.strip().lower()
+        content_lower = content.lower()
+        if not query_stripped:
+            return 0.0
+        if query_stripped in content_lower:
+            return 1.0
+
         query_tokens = self._tokenize(query)
         if not query_tokens:
             return 0.0
+
         content_tokens = set(self._tokenize(content))
         matched = sum(1 for token in query_tokens if token in content_tokens)
-        return matched / len(query_tokens)
+        token_score = matched / len(query_tokens)
+
+        query_grams = set(self._character_bigrams(query_stripped))
+        content_grams = set(self._character_bigrams(content_lower))
+        if not query_grams:
+            return token_score
+        gram_score = len(query_grams & content_grams) / len(query_grams)
+        return max(token_score, gram_score)
 
     def _calculate_time_decay(self, created_at: float) -> float:
         age_seconds = max(0.0, time.time() - created_at)
@@ -132,6 +165,12 @@ class WorkingMemory(BaseMemory):
 
     def _tokenize(self, text: str) -> list[str]:
         return re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+
+    def _character_bigrams(self, text: str) -> list[str]:
+        compact = "".join(ch for ch in text if not ch.isspace())
+        if len(compact) < 2:
+            return [compact] if compact else []
+        return [compact[index : index + 2] for index in range(len(compact) - 1)]
 
     def _tfidf_vector(
         self,

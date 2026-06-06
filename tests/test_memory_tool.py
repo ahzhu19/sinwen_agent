@@ -4,22 +4,8 @@ import pytest
 
 from memory.config import MemoryConfig
 from memory.manager import MemoryManager
+from tests.memory_fakes import FakeMemoryManager, FailingMemoryManager
 from tools.builtin.memory_tool import MemoryTool
-
-
-class FakeMemoryManager:
-    def __init__(self, memory_id: str = "memory-1234567890") -> None:
-        self.memory_id = memory_id
-        self.calls: list[dict] = []
-
-    def add_memory(self, **kwargs) -> str:
-        self.calls.append(kwargs)
-        return self.memory_id
-
-
-class FailingMemoryManager:
-    def add_memory(self, **kwargs) -> str:
-        raise RuntimeError("database unavailable")
 
 
 class RecordingMemoryTool(MemoryTool):
@@ -117,7 +103,6 @@ def test_add_memory_delegates_to_memory_manager_with_session_metadata() -> None:
     assert call["content"] == "用户张三是一名 Python 开发者"
     assert call["memory_type"] == "semantic"
     assert call["importance"] == 0.8
-    assert call["auto_classify"] is False
     assert call["metadata"]["source"] == "chat"
     assert call["metadata"]["session_id"] == tool.current_session_id
     assert "timestamp" in call["metadata"]

@@ -88,6 +88,35 @@ class FakeEpisodicStore:
     def delete(self, memory_id: str) -> None:
         self.events.pop(memory_id, None)
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        user_id: str,
+        content: str,
+        importance: float,
+        metadata: dict[str, Any],
+        session_id: str | None = None,
+    ) -> EpisodicEvent:
+        existing = self.events.get(memory_id)
+        if existing is None or existing.user_id != user_id:
+            raise KeyError(f"未找到情景记忆: {memory_id}")
+        meta = dict(metadata)
+        meta.setdefault("session_id", session_id)
+        updated = EpisodicEvent(
+            id=memory_id,
+            user_id=user_id,
+            session_id=session_id,
+            content=content,
+            importance=importance,
+            occurred_at=existing.occurred_at,
+            created_at=existing.created_at,
+            sequence_no=existing.sequence_no,
+            metadata=meta,
+        )
+        self.events[memory_id] = updated
+        return updated
+
 
 class FakeVectorStore:
     def __init__(self) -> None:

@@ -1,19 +1,23 @@
 """反思 Agent 实现：生成 -> 自我批评 -> 改进 循环。"""
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
 
-from .prompts import (
+from .tool_loop import invoke_with_tool_registry
+from prompts import (
     REFLECTION_CRITIQUE_PROMPT,
     REFLECTION_INITIAL_SYSTEM_PROMPT,
     REFLECTION_NO_CHANGES_MARKER,
     REFLECTION_REVISE_PROMPT,
     render_prompt,
 )
+
+if TYPE_CHECKING:
+    from tools.registry import ToolRegistry
 
 
 class ReflectionAgent(Agent):
@@ -31,11 +35,55 @@ class ReflectionAgent(Agent):
         config: Optional[Config] = None,
         max_iterations: int = 3,
         verbose: bool = False,
+        tool_registry: Optional["ToolRegistry"] = None,
+        enable_tool_calling: bool = True,
+        max_tool_iterations: int = 3,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.max_iterations = max_iterations
         self.verbose = verbose
         self.reflection_trace: list[str] = []
+        self.tool_registry = tool_registry
+        self.enable_tool_calling = enable_tool_calling and tool_registry is not None
+        self.max_tool_iterations = max_tool_iterations
+
+    @classmethod
+    def with_agent_tools(
+        cls,
+        name: str,
+        llm: BaseLLM,
+        *,
+        system_prompt: Optional[str] = REFLECTION_INITIAL_SYSTEM_PROMPT,
+        config: Optional[Config] = None,
+        enable_search: bool = True,
+        enable_calculator: bool = True,
+        enable_memory: bool = False,
+        enable_rag: bool = True,
+        max_iterations: int = 3,
+        max_tool_iterations: int = 3,
+        memory_types: list[str] | None = None,
+        verbose: bool = False,
+    ) -> "ReflectionAgent":
+        """使用默认工具集（含可选 memory / rag）创建 ReflectionAgent。"""
+        from tools.agent_registry import create_agent_tool_registry
+
+        registry = create_agent_tool_registry(
+            enable_search=enable_search,
+            enable_calculator=enable_calculator,
+            enable_memory=enable_memory,
+            enable_rag=enable_rag,
+            memory_types=memory_types,
+        )
+        return cls(
+            name=name,
+            llm=llm,
+            system_prompt=system_prompt,
+            config=config,
+            max_iterations=max_iterations,
+            verbose=verbose,
+            tool_registry=registry,
+            max_tool_iterations=max_tool_iterations,
+        )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
         """运行反思循环，返回最终答案。"""
@@ -72,6 +120,15 @@ class ReflectionAgent(Agent):
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": input_text})
+        if self.enable_tool_calling and self.tool_registry is not None:
+            return invoke_with_tool_registry(
+                self.llm,
+                self.tool_registry,
+                messages,
+                max_iterations=self.max_tool_iterations,
+                temperature=temperature,
+                **kwargs,
+            )
         return self.llm.invoke(messages, temperature=temperature, **kwargs) or ""
 
     def _reflect(

@@ -20,13 +20,10 @@ if str(_ROOT) not in sys.path:
 
 from agents.reflection_agent import ReflectionAgent
 from core.llm import BaseLLM
+from prompts.agent import REFLECTION_CODE_SYSTEM_PROMPT
 
-# 通用反思助手：使用 prompts.py 中的默认初稿 / 审稿 / 改写模板
+# 通用反思助手：使用 prompts 中的默认初稿 / 审稿 / 改写模板
 DEFAULT_TASK = "写一篇关于通讯领域物理层安全的技术发展文字（400 字）"
-
-# 代码场景：仅自定义「初稿」系统提示；审稿与改写仍用默认模板
-CODE_SYSTEM_PROMPT = """你是 Python 专家。
-请针对用户任务编写完整、可运行的代码，并附上一句简要说明。"""
 
 CODE_TASK = "编写一个函数 fibonacci(n)，返回第 n 个斐波那契数（n 从 0 开始）"
 
@@ -82,7 +79,7 @@ def main() -> None:
         agent = ReflectionAgent(
             name="我的代码生成助手",
             llm=llm,
-            system_prompt=CODE_SYSTEM_PROMPT,
+            system_prompt=REFLECTION_CODE_SYSTEM_PROMPT,
             max_iterations=args.max_iterations,
             verbose=verbose,
         )

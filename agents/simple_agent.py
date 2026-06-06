@@ -8,7 +8,7 @@ from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
-from .prompts import DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT
+from prompts import DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from tools.base import Tool
@@ -52,6 +52,7 @@ class SimpleAgent(Agent):
         enable_memory: bool = False,
         enable_rag: bool = True,
         max_tool_iterations: int = 5,
+        memory_types: list[str] | None = None,
     ) -> "SimpleAgent":
         """使用默认工具集（含 RAG）创建 SimpleAgent。"""
         from tools.agent_registry import create_agent_tool_registry
@@ -61,6 +62,7 @@ class SimpleAgent(Agent):
             enable_calculator=enable_calculator,
             enable_memory=enable_memory,
             enable_rag=enable_rag,
+            memory_types=memory_types,
         )
         return cls(
             name=name,

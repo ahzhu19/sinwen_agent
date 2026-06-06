@@ -10,7 +10,7 @@ from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
 
-from .prompts import DEFAULT_REACT_SYSTEM_PROMPT, REACT_USER_PROMPT_TEMPLATE, render_prompt
+from prompts import DEFAULT_REACT_SYSTEM_PROMPT, REACT_USER_PROMPT_TEMPLATE, render_prompt
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -82,6 +82,42 @@ class ReActAgent(Agent):
         self.user_prompt_template = user_prompt_template
         self.max_steps = max_steps
         self.react_trace: list[str] = []
+
+    @classmethod
+    def with_agent_tools(
+        cls,
+        name: str,
+        llm: BaseLLM,
+        *,
+        system_prompt: Optional[str] = DEFAULT_REACT_SYSTEM_PROMPT,
+        user_prompt_template: str = REACT_USER_PROMPT_TEMPLATE,
+        config: Optional[Config] = None,
+        enable_search: bool = True,
+        enable_calculator: bool = True,
+        enable_memory: bool = False,
+        enable_rag: bool = True,
+        max_steps: int = 10,
+        memory_types: list[str] | None = None,
+    ) -> "ReActAgent":
+        """使用默认工具集（含可选 memory / rag）创建 ReActAgent。"""
+        from tools.agent_registry import create_agent_tool_registry
+
+        registry = create_agent_tool_registry(
+            enable_search=enable_search,
+            enable_calculator=enable_calculator,
+            enable_memory=enable_memory,
+            enable_rag=enable_rag,
+            memory_types=memory_types,
+        )
+        return cls(
+            name=name,
+            llm=llm,
+            tool_registry=registry,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            config=config,
+            max_steps=max_steps,
+        )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
         """运行文本 ReAct 循环，返回最终答案。"""

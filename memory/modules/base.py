@@ -51,6 +51,32 @@ class InMemoryStore:
         if not typed_records:
             self._records_by_type.pop(record.memory_type, None)
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        content: str | None = None,
+        importance: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryRecord | None:
+        record = self._records.get(memory_id)
+        if record is None:
+            return None
+        new_metadata = dict(record.metadata)
+        if metadata:
+            new_metadata.update(metadata)
+        updated = MemoryRecord(
+            id=record.id,
+            content=content if content is not None else record.content,
+            memory_type=record.memory_type,
+            importance=importance if importance is not None else record.importance,
+            metadata=new_metadata,
+        )
+        self._records[memory_id] = updated
+        typed_records = self._records_by_type.setdefault(updated.memory_type, {})
+        typed_records[memory_id] = updated
+        return updated
+
 
 class BaseMemory:
     memory_type: str

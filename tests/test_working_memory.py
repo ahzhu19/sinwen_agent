@@ -128,3 +128,19 @@ def test_working_memory_retrieve_cleans_expired_records() -> None:
 
     assert [record.id for record in results] == [fresh_id]
     assert store.get(expired_id) is None
+
+
+def test_working_memory_retrieve_matches_chinese_substring_in_content() -> None:
+    store = InMemoryStore()
+    memory = WorkingMemory(MemoryConfig(working_memory_ttl_seconds=3600), store)
+
+    theme_id = memory.add(
+        "用户偏好深色主题界面",
+        0.6,
+        {"session_id": "session_1"},
+    )
+    memory.add("无关的浅色背景说明", 0.5, {"session_id": "session_1"})
+
+    results = memory.retrieve("深色主题", limit=5, session_id="session_1")
+
+    assert [record.id for record in results] == [theme_id]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from datetime import datetime, timedelta
 
 from memory.config import MemoryConfig
@@ -163,3 +164,101 @@ def test_memory_manager_perceptual_uses_injected_backends() -> None:
         limit=3,
     )
     assert len(results) >= 1
+
+
+def test_perceptual_memory_rejects_invalid_modality() -> None:
+    bundle = create_perceptual_bundle()
+    memory = PerceptualMemory(
+        config=MemoryConfig(),
+        user_id="user123",
+        perceptual_store=InMemoryPerceptualStore(),
+        vector_stores=bundle.vector_stores,
+        embedding_provider=bundle.embeddings,
+    )
+
+    with pytest.raises(ValueError, match="不支持的感知模态"):
+        memory.add("内容", 0.5, {"modality": "hologram"})
+
+
+def test_perceptual_memory_update_preserves_id_and_reindexes_vector() -> None:
+    bundle = create_perceptual_bundle()
+    store = InMemoryPerceptualStore()
+    memory = PerceptualMemory(
+        config=MemoryConfig(),
+        user_id="user123",
+        perceptual_store=store,
+        vector_stores=bundle.vector_stores,
+        embedding_provider=bundle.embeddings,
+    )
+
+    memory_id = memory.add(
+        "用户上传了架构图",
+        0.7,
+        {"modality": "image", "caption": "旧架构图", "session_id": "s1"},
+    )
+    assert memory_id in bundle.image_vectors.records
+
+    updated_id = memory.update(
+        memory_id,
+        content="用户上传了新版架构图",
+        importance=0.9,
+        metadata={"modality": "image", "caption": "新架构图", "session_id": "s1"},
+    )
+
+    assert updated_id == memory_id
+    item = store.get(memory_id)
+    assert item is not None
+    assert item.content == "用户上传了新版架构图"
+    assert item.importance == 0.9
+    assert memory_id in bundle.image_vectors.records
+    assert bundle.embeddings.calls[-1] == "新架构图"
+
+
+def test_perceptual_memory_update_switches_modality_and_moves_vector() -> None:
+    bundle = create_perceptual_bundle()
+    store = InMemoryPerceptualStore()
+    memory = PerceptualMemory(
+        config=MemoryConfig(),
+        user_id="user123",
+        perceptual_store=store,
+        vector_stores=bundle.vector_stores,
+        embedding_provider=bundle.embeddings,
+    )
+
+    memory_id = memory.add(
+        "用户说需要保存数据库架构",
+        0.6,
+        {"modality": "text", "session_id": "s1"},
+    )
+    assert memory_id in bundle.text_vectors.records
+    assert memory_id not in bundle.image_vectors.records
+
+    memory.update(
+        memory_id,
+        content="用户上传了数据库架构图",
+        importance=0.8,
+        metadata={"modality": "image", "caption": "数据库架构", "session_id": "s1"},
+    )
+
+    assert store.get(memory_id).modality == "image"
+    assert memory_id not in bundle.text_vectors.records
+    assert memory_id in bundle.image_vectors.records
+
+
+def test_perceptual_memory_update_raises_when_missing() -> None:
+    bundle = create_perceptual_bundle()
+    memory = PerceptualMemory(
+        config=MemoryConfig(),
+        user_id="user123",
+        perceptual_store=InMemoryPerceptualStore(),
+        vector_stores=bundle.vector_stores,
+        embedding_provider=bundle.embeddings,
+    )
+
+    with pytest.raises(KeyError, match="未找到记忆"):
+        memory.update(
+            "missing-id",
+            content="内容",
+            importance=0.5,
+            metadata={"modality": "text"},
+        )

@@ -135,6 +135,46 @@ def test_episodic_memory_remove_deletes_both_stores(
     assert memory_id not in vectors.records
 
 
+def test_episodic_memory_update_preserves_id_and_reindexes_vector(
+    episodic_memory: EpisodicMemory,
+    episodic_bundle: tuple,
+) -> None:
+    store, vectors, embeddings = episodic_bundle
+
+    memory_id = episodic_memory.add(
+        "用户完成了 PostgreSQL 迁移",
+        0.7,
+        {"session_id": "session_1"},
+    )
+    original_sequence = store.events[memory_id].sequence_no
+
+    updated_id = episodic_memory.update(
+        memory_id,
+        content="用户完成了 PostgreSQL 与 Milvus 迁移",
+        importance=0.9,
+        metadata={"session_id": "session_1", "source": "chat"},
+    )
+
+    assert updated_id == memory_id
+    assert len(store.events) == 1
+    event = store.events[memory_id]
+    assert event.content == "用户完成了 PostgreSQL 与 Milvus 迁移"
+    assert event.importance == 0.9
+    assert event.sequence_no == original_sequence
+    assert memory_id in vectors.records
+    assert embeddings.calls[-1] == "用户完成了 PostgreSQL 与 Milvus 迁移"
+
+
+def test_episodic_memory_update_raises_when_missing(episodic_memory: EpisodicMemory) -> None:
+    with pytest.raises(KeyError, match="未找到记忆"):
+        episodic_memory.update(
+            "missing-id",
+            content="内容",
+            importance=0.5,
+            metadata={},
+        )
+
+
 def test_memory_manager_episodic_uses_injected_backends(episodic_bundle: tuple) -> None:
     store, vectors, embeddings = episodic_bundle
     manager = MemoryManager(

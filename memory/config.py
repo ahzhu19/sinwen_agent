@@ -40,6 +40,23 @@ class MemoryConfig:
     embed_api_key: str | None = None
     embed_base_url: str | None = None
 
+    enable_vector_outbox: bool = True
+    enable_persistent_vector_outbox: bool = True
+    vector_outbox_max_attempts: int = 5
+    vector_outbox_poll_on_read: bool = True
+    vector_outbox_worker_batch_size: int = 20
+
+    concept_extraction_max_concepts: int = 8
+    llm_model_id: str = "gpt-4o-mini"
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+
+    semantic_graph_max_hops: int = 2
+    semantic_graph_hop_decay: float = 0.65
+    semantic_graph_expansion_limit: int = 20
+
+    semantic_read_your_writes_limit: int = 20
+
     @classmethod
     def from_env(cls) -> MemoryConfig:
         load_dotenv()
@@ -104,4 +121,34 @@ class MemoryConfig:
             embed_model_name=os.getenv("EMBED_MODEL_NAME", "text-embedding-v3").strip('"'),
             embed_api_key=os.getenv("EMBED_API_KEY"),
             embed_base_url=os.getenv("EMBED_BASE_URL"),
+            enable_vector_outbox=os.getenv("ENABLE_VECTOR_OUTBOX", "true").lower()
+            in {"1", "true", "yes"},
+            enable_persistent_vector_outbox=os.getenv(
+                "ENABLE_PERSISTENT_VECTOR_OUTBOX",
+                "true",
+            ).lower()
+            in {"1", "true", "yes"},
+            vector_outbox_max_attempts=int(os.getenv("VECTOR_OUTBOX_MAX_ATTEMPTS", "5")),
+            vector_outbox_poll_on_read=os.getenv(
+                "VECTOR_OUTBOX_POLL_ON_READ",
+                "true",
+            ).lower()
+            in {"1", "true", "yes"},
+            vector_outbox_worker_batch_size=int(
+                os.getenv("VECTOR_OUTBOX_WORKER_BATCH_SIZE", "20")
+            ),
+            concept_extraction_max_concepts=int(
+                os.getenv("CONCEPT_EXTRACTION_MAX_CONCEPTS", "8")
+            ),
+            llm_model_id=os.getenv("LLM_MODEL_ID", "gpt-4o-mini").strip('"'),
+            llm_api_key=os.getenv("LLM_API_KEY"),
+            llm_base_url=os.getenv("LLM_BASE_URL") or os.getenv("EMBED_BASE_URL"),
+            semantic_graph_max_hops=int(os.getenv("SEMANTIC_GRAPH_MAX_HOPS", "2")),
+            semantic_graph_hop_decay=float(os.getenv("SEMANTIC_GRAPH_HOP_DECAY", "0.65")),
+            semantic_graph_expansion_limit=int(
+                os.getenv("SEMANTIC_GRAPH_EXPANSION_LIMIT", "20")
+            ),
+            semantic_read_your_writes_limit=int(
+                os.getenv("SEMANTIC_READ_YOUR_WRITES_LIMIT", "20")
+            ),
         )

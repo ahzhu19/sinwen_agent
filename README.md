@@ -137,6 +137,35 @@ uv run python scripts/try_memory.py
 uv run pytest tests/ -v
 ```
 
+可选真机集成（需本地 Docker 与 API Key）：
+
+```bash
+RUN_EPISODIC_INTEGRATION=1 uv run pytest tests/test_episodic_integration.py -v
+RUN_SEMANTIC_INTEGRATION=1 uv run pytest tests/test_semantic_integration.py -v
+```
+
+语义记忆 LLM 概念抽取（写入 Neo4j 图）：配置 `LLM_MODEL_ID` / `LLM_API_KEY`；`LLM_BASE_URL` 未设时回退到 `EMBED_BASE_URL`（Qwen/DashScope 可与 embedding 共用 compatible-mode 地址）。
+
+### 记忆向量 Worker
+
+`docker compose up` 会同时启动 Postgres、Neo4j、Milvus 以及 `memory-worker`。Worker 负责消费 Postgres / Neo4j outbox，异步写入 Milvus 向量索引。
+
+也可以单独运行：
+
+```bash
+uv run python scripts/memory_vector_worker.py --loop --interval 10
+```
+
+查看 outbox 积压状态：
+
+```bash
+uv run python scripts/memory_status.py
+```
+
+## 提示词
+
+所有 LLM 提示词集中在 [`prompts/`](prompts/)（`agent` / `memory` / `rag`）；修改语义记忆概念抽取请编辑 `prompts/memory.py`。
+
 ## 设计理念
 
 这个项目不依赖 LangChain、AutoGPT 等框架。每个 Agent 的推理循环都是显式手写的——消息历史怎么管、模型输出怎么解析、工具调用怎么在循环里组合——目的是理解 Agent 的内部运作机制，而不是学会调某个库的 API。
@@ -171,28 +200,24 @@ uv run pytest tests/ -v
 ### 未完成工作
 
 **Agent 层面**
-- SimpleAgent / ReActAgent 尚未集成记忆系统（Agent 的 run 循环里未调用 MemoryTool）
-- ReflectionAgent 的自我批评可以接入语义记忆做知识沉淀
-- PlanAndSolveAgent 的计划步骤可以依赖情景记忆中的历史计划复用
+- SimpleAgent / ReActAgent / ReflectionAgent / PlanAndSolveAgent 均可通过 `with_agent_tools(enable_memory=True)` 或 `create_agent_tool_registry(enable_memory=True)` 启用 MemoryTool
+- Reflection 初稿生成、PlanAndSolve 步骤求解支持 Function Calling 工具（含 memory / rag）
 
-**语义记忆概念抽取**
-- 当前仅使用 `metadata["concepts"]` 或简单正则分词兜底
-- 未接入 LLM 自动概念抽取，导致 Neo4j 图检索质量受限
-- 建议引入概念抽取器接口（LLM 或 jieba 分词），替代正则兜底
+**语义记忆质量增强（已实现）**
+- 概念抽取：`metadata.concepts` 优先；否则调用 LLM 写入 Neo4j 概念边（无正则兜底）
+- Milvus 双写 outbox：`ENABLE_VECTOR_OUTBOX=true`，写入失败入队，检索前 `MemoryManager.flush_vector_outbox()` 自动补偿
+- 图扩展检索：Neo4j 一跳直接概念匹配 + 二跳 `RELATES_TO`/共现桥接，路径衰减 `SEMANTIC_GRAPH_HOP_DECAY`
 
 **双写事务性**
-- EpisodicMemory / SemanticMemory 的 `add` 先写结构化/图存储再写 Milvus
-- 如果第二个写失败，第一个不回滚，可能产生孤立数据
-- 建议引入 outbox 模式或 saga 补偿机制
+- Episodic：`episodic_memories` 与 `memory_vector_outbox` 同事务写入；Worker：`uv run python scripts/memory_vector_worker.py`
+- Semantic：**Neo4j 同事务**写 `SemanticMemory` + `SemanticOutboxEvent`；Worker 按 `version` embed → Milvus；读路径补 `embedding_status=pending`（read-your-writes）
+- 测试/无 `DATABASE_URL` 时 episodic 仍使用内存 outbox；详见 [memory/consistency_backlog.md](memory/consistency_backlog.md)
 
-**Neo4j 图扩展检索**
-- 当前图检索只对 Milvus 返回的候选记忆计算概念匹配分数
-- 尚未从 Neo4j 扩展一跳/两跳概念邻居加入候选集
-- 尚未利用关系类型权重和路径长度衰减
-
-**MemoryTool 未实现的 action**
-- `summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all` 为占位实现
-- search 目前仅支持 episodic 和 semantic，working 的 search 需要从 WorkingMemory.retrieve 桥接
+**MemoryTool 已实现 action**
+- `add`、`search`（含 working）、`summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all`
+- `forget` 当前主要支持 working（过期清理 + 低重要性删除）
+- `consolidate` 将当前会话 working 记忆写入 episodic（需同时启用两类记忆）
+- `clear_all` 对 semantic 按用户（及可选 session）批量删除（Neo4j + Milvus）
 
 **PerceptualMemory**
 - 第一版实现已支持多模态路由（text/image/audio/video/file），图像和音频当前使用文本代理（caption/transcript），尚未接入真实多模态 embedding 模型（CLIP/CLAP）
@@ -205,8 +230,8 @@ uv run pytest tests/ -v
 - InMemoryStore 按类型索引虽然存在，但 WorkingMemory 仍保留旧模块引用，未全局统一
 
 **跨模块集成**
-- Agent ↔ MemoryTool 尚未打通（Agent 的 tool 列表中未包含 MemoryTool）
-- 各 Agent 的 prompts 中未包含记忆操作指导
-- 缺少端到端集成测试（Agent + MemoryTool 联调）
+- 四类 Agent + MemoryTool 均已提供 `with_agent_tools` 工厂（memory 默认关闭，需 `enable_memory=True`）
+- 已有 `tests/test_simple_agent_memory.py`、`tests/test_react_agent_with_tools.py`、`tests/test_agents_with_memory.py`
+- 真机脚本：`scripts/try_memory_agent.py`（tool / simple / react）
 
 完整妥协项详见 [memory/implementation_status.md](memory/implementation_status.md)。

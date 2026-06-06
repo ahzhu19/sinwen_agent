@@ -2,19 +2,23 @@
 
 import ast
 import re
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
 
-from .prompts import (
+from .tool_loop import invoke_with_tool_registry
+from prompts import (
     PLAN_AND_SOLVE_PLANNER_PROMPT,
     PLAN_AND_SOLVE_SOLVER_PROMPT,
     PLAN_AND_SOLVE_SYNTHESIS_PROMPT,
     render_prompt,
 )
+
+if TYPE_CHECKING:
+    from tools.registry import ToolRegistry
 
 STEP_FAILED_MARKER = "[此步未能完成]"
 PLAN_PARSE_ERROR_MESSAGE = "抱歉，我无法为这个问题制定有效的计划。"
@@ -63,12 +67,56 @@ class PlanAndSolveAgent(Agent):
         planner_prompt: str = PLAN_AND_SOLVE_PLANNER_PROMPT,
         max_plan_retries: int = 3,
         verbose: bool = False,
+        tool_registry: Optional["ToolRegistry"] = None,
+        enable_tool_calling: bool = True,
+        max_tool_iterations: int = 3,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.planner_prompt = planner_prompt
         self.max_plan_retries = max_plan_retries
         self.verbose = verbose
         self.plan_trace: list[str] = []
+        self.tool_registry = tool_registry
+        self.enable_tool_calling = enable_tool_calling and tool_registry is not None
+        self.max_tool_iterations = max_tool_iterations
+
+    @classmethod
+    def with_agent_tools(
+        cls,
+        name: str,
+        llm: BaseLLM,
+        *,
+        system_prompt: Optional[str] = None,
+        config: Optional[Config] = None,
+        enable_search: bool = True,
+        enable_calculator: bool = True,
+        enable_memory: bool = False,
+        enable_rag: bool = True,
+        max_plan_retries: int = 3,
+        max_tool_iterations: int = 3,
+        memory_types: list[str] | None = None,
+        verbose: bool = False,
+    ) -> "PlanAndSolveAgent":
+        """使用默认工具集（含可选 memory / rag）创建 PlanAndSolveAgent。"""
+        from tools.agent_registry import create_agent_tool_registry
+
+        registry = create_agent_tool_registry(
+            enable_search=enable_search,
+            enable_calculator=enable_calculator,
+            enable_memory=enable_memory,
+            enable_rag=enable_rag,
+            memory_types=memory_types,
+        )
+        return cls(
+            name=name,
+            llm=llm,
+            system_prompt=system_prompt,
+            config=config,
+            max_plan_retries=max_plan_retries,
+            verbose=verbose,
+            tool_registry=registry,
+            max_tool_iterations=max_tool_iterations,
+        )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
         self.plan_trace = []
@@ -138,9 +186,19 @@ class PlanAndSolveAgent(Agent):
             current_step=current_step,
             history=history,
         )
-        messages = [{"role": "user", "content": prompt}]
+        messages: list[dict[str, str]] = [{"role": "user", "content": prompt}]
         try:
-            result = self.llm.invoke(messages, temperature=temperature, **kwargs)
+            if self.enable_tool_calling and self.tool_registry is not None:
+                result = invoke_with_tool_registry(
+                    self.llm,
+                    self.tool_registry,
+                    messages,
+                    max_iterations=self.max_tool_iterations,
+                    temperature=temperature,
+                    **kwargs,
+                )
+            else:
+                result = self.llm.invoke(messages, temperature=temperature, **kwargs)
         except Exception as e:
             print(f"❌ 步骤执行异常: {e}")
             return STEP_FAILED_MARKER

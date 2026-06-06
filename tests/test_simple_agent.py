@@ -2,7 +2,7 @@
 from collections.abc import Iterator
 from typing import Any
 
-from agents.prompts import DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT
+from prompts import DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT
 from agents.simple_agent import SimpleAgent
 from core.llm import BaseLLM, LLMMessages
 from core.llm_types import LLMToolResponse, ToolCall

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from agents.prompts import render_prompt
+from prompts import render_prompt
 from agents.react_agent import ReActAgent, parse_react_output
 from core.llm import BaseLLM, LLMMessages
 from core.llm_types import LLMToolResponse

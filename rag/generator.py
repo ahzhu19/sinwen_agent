@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from prompts.rag import RAG_ANSWER_SYSTEM_PROMPT, RAG_ANSWER_USER_PROMPT_TEMPLATE
+from prompts.render import render_prompt
+
 from .models import RagAnswer, RagSearchResult
 
 
@@ -16,17 +19,14 @@ class RagGenerator:
             return RagAnswer(answer="无法从知识库中找到足够信息回答该问题。", sources=[])
         context = self._assemble_context(sources)
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是一个严格基于知识库上下文回答的助手。"
-                    "只使用提供的上下文回答；如果上下文不足，明确说明无法确认。"
-                    "回答中必须引用来源编号，例如 [Source 1]。"
-                ),
-            },
+            {"role": "system", "content": RAG_ANSWER_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"问题：{query}\n\n上下文：\n{context}",
+                "content": render_prompt(
+                    RAG_ANSWER_USER_PROMPT_TEMPLATE,
+                    query=query,
+                    context=context,
+                ),
             },
         ]
         response = self._llm.invoke(messages, temperature=0)

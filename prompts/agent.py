@@ -1,14 +1,5 @@
 """Agent 默认提示词模板。"""
 
-
-def render_prompt(template: str, **variables: object) -> str:
-    """渲染 prompt 模板，并把缺失变量转换成更清晰的错误。"""
-    try:
-        return template.format(**variables)
-    except KeyError as e:
-        missing_key = e.args[0]
-        raise ValueError(f"Prompt 缺少变量: {missing_key}") from e
-
 DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT = """你是一个简洁、可靠的 AI 助手。
 
 行为准则：
@@ -18,6 +9,7 @@ DEFAULT_SIMPLE_AGENT_SYSTEM_PROMPT = """你是一个简洁、可靠的 AI 助手
 - 如果可以使用工具，在需要外部信息、计算或执行操作时优先使用工具。
 - 工具结果优先于模型猜测。
 - 需要查阅已摄取的知识文档时，使用 `rag` 工具（ingest 摄取、search 检索片段、answer 生成带来源的回答）。
+- 需要记住或回忆对话上下文时，使用 `memory` 工具（add 写入、search 检索、summary/stats 查看状态、consolidate 将工作记忆整合到情景记忆）。
 """
 
 
@@ -34,6 +26,7 @@ Action Input: JSON 参数；当 Action 是 Finish 时，这里写最终答案
 - 只有在看到 Observation 后，才能基于工具结果继续推理。
 - 不要编造 Observation；需要信息时使用工具。
 - 当已经可以回答用户问题时，使用 Action: Finish。
+- 需要外部事实用 search；需要知识库文档用 rag；需要记住或回忆会话信息用 memory。
 """
 
 
@@ -54,6 +47,10 @@ REFLECTION_NO_CHANGES_MARKER = "NO_CHANGES"
 
 REFLECTION_INITIAL_SYSTEM_PROMPT = """你是一个认真负责的 AI 助手。
 请针对用户的问题给出尽量完整、准确的初版回答。"""
+
+
+REFLECTION_CODE_SYSTEM_PROMPT = """你是 Python 专家。
+请针对用户任务编写完整、可运行的代码，并附上一句简要说明。"""
 
 
 REFLECTION_CRITIQUE_PROMPT = """你是一个严格的审稿人。请审阅下面针对用户问题的回答，逐条指出存在的问题，

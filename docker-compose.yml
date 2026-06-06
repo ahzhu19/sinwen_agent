@@ -101,6 +101,27 @@ services:
       retries: 3
       start_period: 90s
 
+  memory-worker:
+    build: .
+    container_name: hello-agents-memory-worker
+    command: uv run python scripts/memory_vector_worker.py --loop --interval 10
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://hello_agents:hello-agents-password@postgres:5432/hello_agents
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: hello-agents-password
+      MILVUS_URI: http://milvus-standalone:19530
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      milvus-standalone:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   neo4j_data:
   neo4j_logs:

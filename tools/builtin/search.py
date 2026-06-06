@@ -219,7 +219,7 @@ class SearchTool(Tool):
         return _is_time_sensitive(query)
 
     def _llm_route_time_sensitive(self, query: str) -> bool:
-        from agents.prompts import SEARCH_ROUTING_PROMPT, render_prompt
+        from prompts import SEARCH_ROUTING_PROMPT, render_prompt
 
         prompt = render_prompt(SEARCH_ROUTING_PROMPT, query=query)
         try:

@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from ..config import MemoryConfig
+from .postgres_outbox_store import _OUTBOX_SCHEMA_SQL
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,19 @@ class EpisodicMemoryStore(Protocol):
         ...
 
 
+    def update(
+        self,
+        memory_id: str,
+        *,
+        user_id: str,
+        content: str,
+        importance: float,
+        metadata: dict[str, Any],
+        session_id: str | None = None,
+    ) -> EpisodicEvent:
+        ...
+
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS episodic_memories (
     id UUID PRIMARY KEY,
@@ -92,8 +106,201 @@ class PostgresEpisodicMemoryStore:
             return
         with psycopg.connect(self._database_url) as conn:
             conn.execute(_SCHEMA_SQL)
+            conn.execute(_OUTBOX_SCHEMA_SQL)
             conn.commit()
         self._schema_ready = True
+
+    def insert_with_vector_outbox(
+        self,
+        *,
+        user_id: str,
+        content: str,
+        importance: float,
+        metadata: dict[str, Any],
+        vector: list[float],
+        collection_name: str,
+        max_attempts: int,
+        session_id: str | None = None,
+        occurred_at: datetime | None = None,
+        memory_id: str | None = None,
+    ) -> EpisodicEvent:
+        """在同一事务内写入情景记忆并登记 Milvus outbox。"""
+        self.ensure_schema()
+        event_id = memory_id or str(uuid4())
+        occurred = occurred_at or datetime.now(timezone.utc)
+        meta = dict(metadata)
+        meta.setdefault("session_id", session_id)
+
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                INSERT INTO episodic_memories (
+                    id, user_id, session_id, content, importance, occurred_at, metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, user_id, session_id, content, importance,
+                          occurred_at, created_at, sequence_no, metadata
+                """,
+                (
+                    event_id,
+                    user_id,
+                    session_id,
+                    content,
+                    importance,
+                    occurred,
+                    Jsonb(meta),
+                ),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO memory_vector_outbox (
+                    memory_kind, memory_id, user_id, session_id,
+                    collection_name, op, vector, status, attempts,
+                    max_attempts, next_retry_at, updated_at
+                )
+                VALUES ('episodic', %s, %s, %s, %s, 'upsert', %s, 'pending', 0, %s, now(), now())
+                ON CONFLICT (memory_kind, memory_id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    session_id = EXCLUDED.session_id,
+                    collection_name = EXCLUDED.collection_name,
+                    op = 'upsert',
+                    vector = EXCLUDED.vector,
+                    status = 'pending',
+                    attempts = 0,
+                    max_attempts = EXCLUDED.max_attempts,
+                    last_error = NULL,
+                    next_retry_at = now(),
+                    updated_at = now()
+                """,
+                (
+                    event_id,
+                    user_id,
+                    session_id,
+                    collection_name,
+                    Jsonb(vector),
+                    max_attempts,
+                ),
+            )
+            conn.commit()
+
+        assert row is not None
+        return _row_to_event(row)
+
+    def update_with_vector_outbox(
+        self,
+        *,
+        memory_id: str,
+        user_id: str,
+        content: str,
+        importance: float,
+        metadata: dict[str, Any],
+        vector: list[float],
+        collection_name: str,
+        max_attempts: int,
+        session_id: str | None = None,
+    ) -> EpisodicEvent:
+        """在同一事务内更新情景记忆并登记 Milvus outbox（保留 id / sequence_no）。"""
+        self.ensure_schema()
+        meta = dict(metadata)
+        meta.setdefault("session_id", session_id)
+
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                UPDATE episodic_memories
+                SET content = %s,
+                    importance = %s,
+                    session_id = %s,
+                    metadata = %s
+                WHERE id = %s AND user_id = %s
+                RETURNING id, user_id, session_id, content, importance,
+                          occurred_at, created_at, sequence_no, metadata
+                """,
+                (
+                    content,
+                    importance,
+                    session_id,
+                    Jsonb(meta),
+                    memory_id,
+                    user_id,
+                ),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"未找到情景记忆: {memory_id}")
+            conn.execute(
+                """
+                INSERT INTO memory_vector_outbox (
+                    memory_kind, memory_id, user_id, session_id,
+                    collection_name, op, vector, status, attempts,
+                    max_attempts, next_retry_at, updated_at
+                )
+                VALUES ('episodic', %s, %s, %s, %s, 'upsert', %s, 'pending', 0, %s, now(), now())
+                ON CONFLICT (memory_kind, memory_id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    session_id = EXCLUDED.session_id,
+                    collection_name = EXCLUDED.collection_name,
+                    op = 'upsert',
+                    vector = EXCLUDED.vector,
+                    status = 'pending',
+                    attempts = 0,
+                    max_attempts = EXCLUDED.max_attempts,
+                    last_error = NULL,
+                    next_retry_at = now(),
+                    updated_at = now()
+                """,
+                (
+                    memory_id,
+                    user_id,
+                    session_id,
+                    collection_name,
+                    Jsonb(vector),
+                    max_attempts,
+                ),
+            )
+            conn.commit()
+
+        return _row_to_event(row)
+
+    def update(
+        self,
+        memory_id: str,
+        *,
+        user_id: str,
+        content: str,
+        importance: float,
+        metadata: dict[str, Any],
+        session_id: str | None = None,
+    ) -> EpisodicEvent:
+        self.ensure_schema()
+        meta = dict(metadata)
+        meta.setdefault("session_id", session_id)
+
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                UPDATE episodic_memories
+                SET content = %s,
+                    importance = %s,
+                    session_id = %s,
+                    metadata = %s
+                WHERE id = %s AND user_id = %s
+                RETURNING id, user_id, session_id, content, importance,
+                          occurred_at, created_at, sequence_no, metadata
+                """,
+                (
+                    content,
+                    importance,
+                    session_id,
+                    Jsonb(meta),
+                    memory_id,
+                    user_id,
+                ),
+            ).fetchone()
+            conn.commit()
+
+        if row is None:
+            raise KeyError(f"未找到情景记忆: {memory_id}")
+        return _row_to_event(row)
 
     def insert(
         self,

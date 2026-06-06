@@ -6,39 +6,29 @@
 - `MemoryManager` 按启用类型初始化并分发到对应记忆模块。
 - `WorkingMemory`：内存存储、TTL 清理、容量控制、会话检索、混合关键词/向量式评分。
 - `EpisodicMemory`：PostgreSQL 结构化事件存储 + Milvus 向量检索的第一版编排。
-- `SemanticMemory`：Neo4j 图存储 + Milvus 向量检索的第一版编排。
-  - 写入时同步写 Neo4j 语义图与 Milvus 向量库。
-  - 检索公式为 `(向量相似度 * 0.7 + 图相似度 * 0.3) * (0.8 + 重要性 * 0.4)`。
-  - Neo4j 中保存 `SemanticMemory`、`Concept`，并用 `MENTIONS` 关系连接。
-- `PerceptualMemory`：感知记忆第一版编排。
-  - 按 `text/image/audio/video/file` 模态路由到不同 Milvus collection。
-  - 元数据写入 `InMemoryPerceptualStore`，原始数据只保存路径或 URI。
-  - 检索公式为 `(向量相似度 * 0.8 + 时间近因性 * 0.2) * (0.8 + 重要性 * 0.4)`。
-  - 时间近因性使用指数衰减，并保留最低 0.1 基础分。
+- `SemanticMemory`：Neo4j 图存储 + Milvus 向量检索；**Neo4j 内 Transactional Outbox**（`version` / `embedding_status` / Worker 同步 Milvus）。
+- `PerceptualMemory`（**experimental**）：元数据仅进程内存；图像/音频使用 caption/transcript 文本代理 embedding；默认 `enable_perceptual=False`。
+- **产品化 Tool action**：`add` / `search` / `summary` / `stats` / `update` / `remove` / `forget` / `consolidate` / `clear_all`。
+- `search` 已支持 `working`（通过 `WorkingMemory.retrieve`）。
+- Agent 集成：`create_agent_tool_registry(enable_memory=True)`、`SimpleAgent` / `ReActAgent.with_agent_tools`、系统提示词。
 
 ## 当前妥协
 
-- `SemanticMemory` 暂不做 LLM 自动概念抽取。
-  - 优先使用 `metadata["concepts"]`。
-  - 如果调用方没有传 concepts，仅用简单正则分词作为兜底。
-- 图检索第一版只对 Milvus 返回的候选记忆计算图相似度。
-  - 还没有单独从 Neo4j 扩展图邻居并加入候选集。
-- `EpisodicMemory.add()` 和 `SemanticMemory.add()` 仍不是严格事务式双写。
-  - 如果结构化/图存储写入成功但 Milvus 写入失败，暂未自动回滚。
-- `MemoryTool` 默认只启用 `working`。
-  - `episodic`、`semantic` 需要显式传入 `memory_types`，避免默认初始化时强制要求数据库和 embedding 配置。
-- `MemoryTool` 的 `summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all` 仍是占位。
-- `PerceptualMemory` 暂未接入真实多模态 embedding 模型。
-  - 图像第一版使用 `caption` 或 `ocr_text` 作为文本代理。
-  - 音频第一版使用 `transcript` 作为文本代理。
-  - 跨模态检索当前是代理文本向量检索，不是 CLIP/CLAP 这类统一向量空间的真实跨模态检索。
-- 中文分词仍比较粗糙，`WorkingMemory` 和 `SemanticMemory` 的关键词兜底都还不是正式分词器。
+- 概念抽取始终走 LLM（`metadata.concepts` 可覆盖）；需配置 `LLM_*` 或 `EMBED_BASE_URL` 回退。
+- 图扩展检索为启发式邻居（RELATES_TO + 共现桥接），非全量图遍历。
+- 默认启用 Postgres `memory_vector_outbox`（episodic/perceptual）；语义记忆向量经 **Neo4j `SemanticOutboxEvent`** 异步同步（需 `NEO4J_PASSWORD`）。
+- 需运行 `scripts/memory_vector_worker.py` 异步写 Milvus（含 Neo4j semantic outbox）；`VECTOR_OUTBOX_POLL_ON_READ=true` 时检索前会同步补偿一批。
+- `update`：episodic / semantic / perceptual 均支持原地更新并保留 ID。
+- `forget` 仅实现 working 策略；`clear_all` 对 semantic 按 user/session 批量删除。
+- `MemoryTool` 默认只启用 `working`；episodic/semantic 需显式传入 `memory_types`。
+- PerceptualMemory（experimental）仍使用文本代理 embedding，非真实多模态模型；生产环境优先 RAG 或 semantic。
+
+## 一致性与技术债台账
+
+详见 [consistency_backlog.md](./consistency_backlog.md)（Postgres `memory_vector_outbox` + Worker 方案、问题 ID、优先级）。
 
 ## 后续建议
 
-- 增加语义概念抽取器接口，并接入 LLM/规则混合抽取。
-- 为 Neo4j 实现图扩展检索，例如一跳/两跳概念邻居、关系类型权重、路径长度衰减。
-- 为 Milvus 双写失败增加补偿机制或 outbox。
-- 为 `MemoryTool` 补齐删除、更新、统计、整合等 action。
-- 为 `PerceptualMemory` 接入真实图像/音频 embedding provider，并实现跨模态分数归一化。
-- 引入更适合中文的 tokenizer，改善关键词检索和概念兜底质量。
+- 图扩展：关系类型权重配置（session 过滤已实现）。
+- Perceptual 真实多模态 embedding 与跨模态归一化。
+- 可选：`RUN_SEMANTIC_INTEGRATION=1` 真机回归 Neo4j + Milvus + LLM 概念抽取。
