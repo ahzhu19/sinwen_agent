@@ -1,72 +1,82 @@
 # hello-agents
 
-从零手写 LLM Agent 的学习项目，实现了四种经典 Agent 范式。
+从零手写 LLM Agent，不依赖 LangChain / AutoGPT。推理循环、消息管理、工具调用全部显式实现。
 
-## 四种 Agent
+实际代码量：**核心 ~6000 行，测试 ~4000 行**，当前 **151 测试通过**。
 
-| Agent | 文件 | 原理 |
-|-------|------|------|
-| SimpleAgent | `agents/simple_agent.py` | 基础对话，支持 Function Calling 工具调用和流式输出 |
-| ReActAgent | `agents/react_agent.py` | Thought → Action → Observation 循环，文本解析驱动 |
-| ReflectionAgent | `agents/reflection_agent.py` | 生成初稿 → 自我批评 → 改进，多轮迭代 |
-| PlanAndSolveAgent | `agents/plan_and_solve_agent.py` | 规划步骤列表 → 逐步求解 → 汇总 |
+## 项目结构
+
+```
+core/           LLM 客户端、Agent 基类、消息系统、配置
+agents/         四种 Agent 实现 + 共享 tool_loop
+tools/          工具基类、注册表、链式执行、内置工具
+memory/         四种记忆 + 存储后端 + outbox 事务保证
+rag/            MarkItDown 文档转换 → 分块 → embedding → Milvus 检索
+prompts/        Agent/记忆/RAG 的 LLM 提示词
+tests/          单元测试（151 passed, 3 skipped）
+scripts/        真机试用脚本
+```
+
+## Agent
+
+四种经典范式，各自独立的推理循环：
+
+| Agent | 循环机制 | Function Calling |
+|-------|---------|:---:|
+| SimpleAgent | 基础对话 + 流式输出 | ✅ |
+| ReActAgent | Thought → Action → Observation | ✅ |
+| ReflectionAgent | 生成初稿 → 自我批评 → 改进 | ✅ |
+| PlanAndSolveAgent | 规划步骤 → 逐步求解 → 汇总 | ✅ |
+
+共享 `agents/tool_loop.py`：工具调用的解析、执行、结果注入逻辑抽成独立模块，四种 Agent 都复用它。
+
+四种 Agent 都可通过 `with_agent_tools(enable_memory=True, enable_rag=True)` 挂载记忆和 RAG 工具。统一注册入口在 `tools/agent_registry.py`。
 
 ## 工具系统
 
 ### 内置工具
 
-- **calculator** — 基于 AST 的安全数学表达式求值
-- **search** — 混合搜索，支持 Tavily / SerpApi 双后端，可按关键词或 LLM 智能路由
+| 工具 | 实现 | 说明 |
+|------|------|------|
+| Calculator | `tools/builtin/calculator.py` | AST 安全求值，防注入 |
+| Search | `tools/builtin/search.py` | Tavily / SerpApi 双后端 |
+| MemoryTool | `tools/builtin/memory_tool.py` | 9 个 action，统一四种记忆入口 |
+| RagTool | `tools/builtin/rag_tool.py` | ingest / search / answer |
 
-### 工具链与异步
+### 工具链
 
-- **ToolChain**（`tools/chain.py`）— 工具链管理器，按顺序执行多个工具，支持模板变量和异步执行
-- **Tool / ToolRegistry** — 新增 `arun()` / `aexecute()` 异步方法
+`tools/chain.py` — ToolChain 按顺序执行多个工具，支持模板变量 `{{previous_output}}` 和异步。所有工具实现 `arun()` / `aexecute()` 异步方法。
+
 ## 记忆系统
 
-四类记忆模块，按生命周期和存储后端划分：
+四种记忆覆盖从秒级到天级生命周期。详细设计见 **[docs/architecture/memory.md](docs/architecture/memory.md)**。
 
-| 类型 | 存储 | 检索方式 |
-|------|------|----------|
-| Working | 内存 (InMemoryStore) | TF-IDF + 关键词 + 时间衰减 + 重要性加权 |
-| Episodic | PostgreSQL + Milvus | 向量相似度 + 时间近因 + 重要性加权 |
-| Semantic | Neo4j + Milvus | 向量相似度 + 概念图关系 + 重要性加权 |
-| Perceptual | Milvus (多模态) + 内存元数据 | 向量相似度 + 时间近因 + 重要性加权 |
+| 类型 | 存储 | 检索 |
+|------|------|------|
+| Working | 内存 InMemoryStore | TF-IDF + 关键词 + 时间衰减 + 重要性 |
+| Episodic | PostgreSQL + Milvus | 向量相似度 × 0.8 + 时间近因 × 0.2 |
+| Semantic | Neo4j + Milvus | 向量 × 0.7 + 图概念关系 × 0.3 |
+| Perceptual | Milvus 多模态 + 内存元数据 | 向量 × 0.8 + 时间近因指数衰减 × 0.2 |
 
-MemoryTool 提供统一入口 (`add` / `search` 等 action)，MemoryManager 按类型路由到对应模块。
-配置项见 `.env.example`，实现状态见 `memory/implementation_status.md`。
+**事务保证**：outbox 模式。Episodic 在 PostgreSQL 同事务写 `episodic_memories` + `memory_vector_outbox`；Semantic 在 Neo4j 同事务写 `SemanticMemory` + `SemanticOutboxEvent`。`memory-worker` 异步消费两者写入 Milvus。
+
+**MemoryTool** 暴露 9 个 action：`add` / `search` / `summary` / `stats` / `update` / `remove` / `forget` / `consolidate` / `clear_all`。
 
 ## RAG 知识库
 
-RAG 系统位于 `rag/`，使用 MarkItDown 将外部文档转换为 Markdown，再进行结构化分块、embedding 和 Milvus 检索。PostgreSQL 保存文档、Markdown、chunk 和摄取状态，Milvus 保存可重建的 chunk 向量索引。
+`rag/` 模块流程：**文档文件** → MarkItDown 转 Markdown → 固定大小 + 语义分块 → embedding → Milvus 向量索引。PostgreSQL 保存文档、Markdown、chunk、摄取状态。
 
-第一版通过 `RagTool` 暴露三个 action：
+RagTool 暴露三个 action：`ingest`（摄取本地文件）、`search`（检索片段）、`answer`（检索 + LLM 生成带来源的回答）。
 
-- `ingest`：摄取本地文件。
-- `search`：只检索相关片段。
-- `answer`：检索片段后生成带来源的回答。
+真机试用：
 
-本地使用前需要配置 `DATABASE_URL`、`MILVUS_*` 和 `EMBED_*`。
-
-真机试用：`uv run python scripts/try_rag.py ingest --source <文件路径>`。  
-`SimpleAgent.with_agent_tools(enable_rag=True)` 或 `create_agent_tool_registry(enable_rag=True)` 可将 `rag` 注册到 Agent 工具列表。
-
-## 项目结构
-
-```
-core/           # Agent 基类、LLM 客户端、消息系统、配置
-agents/         # 四种 Agent 实现 + 提示词模板
-tools/          # 工具基类、注册表、链式执行、内置工具
-memory/         # 记忆系统（工作/情景/语义/感知记忆，PostgreSQL + Neo4j + Milvus）
-rag/            # 文档 RAG（MarkItDown + 分块 + PostgreSQL + Milvus）
-tests/          # 测试用例
-scripts/        # 真机试用脚本
-docs/           # 设计文档与规范
+```bash
+uv run python scripts/try_rag.py ingest --source <文件路径>
 ```
 
 ## 快速开始
 
-**环境要求**：Python >= 3.12，[uv](https://docs.astral.sh/uv/)，Docker（可选，记忆基础设施）
+**环境要求**：Python >= 3.12，[uv](https://docs.astral.sh/uv/)，Docker（可选）
 
 ```bash
 git clone git@github.com:ahzhu19/sinwen_agent.git
@@ -74,62 +84,38 @@ cd sinwen_agent
 uv sync
 ```
 
-在项目根目录创建 `.env`，可参考 `.env.example` 查看完整配置项。项目使用 OpenAI 兼容接口，支持任何兼容的 LLM 服务（OpenAI / Qwen / DeepSeek 等）：
+### 配置
+
+项目根目录创建 `.env`，参考 `.env.example`。项目使用 OpenAI 兼容接口：
 
 ```env
 LLM_MODEL_ID=your-model-id
 LLM_API_KEY=your-api-key
 LLM_BASE_URL=https://api.openai.com/v1
 
-# 可选：搜索工具密钥
-TAVILY_API_KEY=your-tavily-key
-SERPAPI_API_KEY=your-serpapi-key
-
-# 可选：Embedding 配置（情景/语义记忆需要）
-EMBED_API_KEY=your-embedding-api-key
+# 可选
+TAVILY_API_KEY=your-tavily-key      # 搜索工具
+EMBED_API_KEY=your-embedding-api-key # 情景/语义记忆 embedding
 EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-### 本地记忆基础设施（可选）
-
-启动 PostgreSQL 关系数据库 + Neo4j 图数据库 + Milvus 向量数据库：
+### 启动记忆基础设施
 
 ```bash
 docker compose up -d
-docker compose ps
 ```
-
-本地服务地址：
 
 | 服务 | 地址 |
 |------|------|
-| PostgreSQL | postgresql://hello_agents:hello-agents-password@localhost:55432/hello_agents |
-| Neo4j Browser | http://localhost:7474 |
-| Neo4j Bolt | bolt://localhost:7687 |
-| Milvus | http://localhost:19530 |
-| MinIO Console | http://localhost:9001 |
+| PostgreSQL | `postgresql://hello_agents:hello-agents-password@localhost:55432/hello_agents` |
+| Neo4j Browser | `http://localhost:7474` |
+| Neo4j Bolt | `bolt://localhost:7687` |
+| Milvus | `http://localhost:19530` |
+| MinIO Console | `http://localhost:9001` |
 
-记忆系统实现状态和当前妥协项见 `memory/implementation_status.md`。
+`docker compose up` 同时启动 memory-worker 自动消费 outbox。
 
-停止服务：`docker compose down`，清除数据：`docker compose down -v`
-
-### 使用示例
-
-```python
-from agents.simple_agent import SimpleAgent
-from core.llm import BaseLLM
-
-a = SimpleAgent("助手", BaseLLM())
-print(a.run("解释什么是摩尔定律"))
-```
-
-也可通过脚本试用：
-
-```bash
-python scripts/try_plan_and_solve.py --task "规划并回答：如何入门 Python"
-python scripts/try_reflection.py --mode code
-uv run python scripts/try_memory.py
-```
+停止：`docker compose down`；清除数据：`docker compose down -v`
 
 ### 运行测试
 
@@ -137,101 +123,24 @@ uv run python scripts/try_memory.py
 uv run pytest tests/ -v
 ```
 
-可选真机集成（需本地 Docker 与 API Key）：
+可选真机集成测试：
 
 ```bash
 RUN_EPISODIC_INTEGRATION=1 uv run pytest tests/test_episodic_integration.py -v
 RUN_SEMANTIC_INTEGRATION=1 uv run pytest tests/test_semantic_integration.py -v
 ```
 
-语义记忆 LLM 概念抽取（写入 Neo4j 图）：配置 `LLM_MODEL_ID` / `LLM_API_KEY`；`LLM_BASE_URL` 未设时回退到 `EMBED_BASE_URL`（Qwen/DashScope 可与 embedding 共用 compatible-mode 地址）。
-
-### 记忆向量 Worker
-
-`docker compose up` 会同时启动 Postgres、Neo4j、Milvus 以及 `memory-worker`。Worker 负责消费 Postgres / Neo4j outbox，异步写入 Milvus 向量索引。
-
-也可以单独运行：
+### 试用脚本
 
 ```bash
-uv run python scripts/memory_vector_worker.py --loop --interval 10
+uv run python scripts/try_memory.py           # 记忆系统全流程
+uv run python scripts/try_memory_agent.py     # Agent + 记忆集成
+uv run python scripts/try_rag.py ingest --source <文件路径>
+uv run python scripts/memory_status.py        # outbox 积压状态
 ```
 
-查看 outbox 积压状态：
+实现状态和已知妥协详见各模块的 `implementation_status.md`：
 
-```bash
-uv run python scripts/memory_status.py
-```
-
-## 提示词
-
-所有 LLM 提示词集中在 [`prompts/`](prompts/)（`agent` / `memory` / `rag`）；修改语义记忆概念抽取请编辑 `prompts/memory.py`。
-
-## 设计理念
-
-这个项目不依赖 LangChain、AutoGPT 等框架。每个 Agent 的推理循环都是显式手写的——消息历史怎么管、模型输出怎么解析、工具调用怎么在循环里组合——目的是理解 Agent 的内部运作机制，而不是学会调某个库的 API。
-
-
-## 项目状态
-
-### 已完成亮点
-
-**Agent 范式**
-- 四种经典 Agent 全部实现，推理循环显式手写，不依赖 LangChain / AutoGPT
-- 每种 Agent 有对应测试覆盖
-
-**工具系统**
-- Calculator 基于 Python AST 安全求值，防护注入攻击
-- Search 支持 Tavily / SerpApi 双后端，可按关键词或 LLM 智能路由
-- ToolChain 实现工具链顺序执行，支持模板变量和异步
-- 所有工具支持 `arun()` 异步方法
-
-**记忆系统**
-- 四类记忆模块：Working / Episodic / Semantic / Perceptual
-- Working 记忆：内存存储 + TF-IDF + 关键词 + 时间衰减 + 重要性加权混合检索，带 TTL 过期和容量淘汰
-- Episodic 记忆：PostgreSQL 结构化存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.8 + 时间近因 × 0.2) × (0.8 + 重要性 × 0.4)`
-- Semantic 记忆：Neo4j 图存储 + Milvus 向量检索，评分公式为 `(向量相似度 × 0.7 + 图概念关系 × 0.3) × (0.8 + 重要性 × 0.4)`
-- Perceptual 记忆：多模态 Milvus 路由（text/image/audio/video/file），元数据落内存，检索公式为 `(向量相似度 × 0.8 + 时间近因 × 0.2) × (0.8 + 重要性 × 0.4)`
-- MemoryTool 统一入口，`add` / `search` action 可用
-- MemoryManager 支持依赖注入，可替换存储后端
-- 核心代码 ~1750 行，测试 ~2110 行，测试/代码比 > 1.2
-- 全部存储层有 Protocol 接口 + Fake 实现，单元测试不依赖 Docker
-- 配置通过环境变量加载（`.env.example` 完整）
-
-### 未完成工作
-
-**Agent 层面**
-- SimpleAgent / ReActAgent / ReflectionAgent / PlanAndSolveAgent 均可通过 `with_agent_tools(enable_memory=True)` 或 `create_agent_tool_registry(enable_memory=True)` 启用 MemoryTool
-- Reflection 初稿生成、PlanAndSolve 步骤求解支持 Function Calling 工具（含 memory / rag）
-
-**语义记忆质量增强（已实现）**
-- 概念抽取：`metadata.concepts` 优先；否则调用 LLM 写入 Neo4j 概念边（无正则兜底）
-- Milvus 双写 outbox：`ENABLE_VECTOR_OUTBOX=true`，写入失败入队，检索前 `MemoryManager.flush_vector_outbox()` 自动补偿
-- 图扩展检索：Neo4j 一跳直接概念匹配 + 二跳 `RELATES_TO`/共现桥接，路径衰减 `SEMANTIC_GRAPH_HOP_DECAY`
-
-**双写事务性**
-- Episodic：`episodic_memories` 与 `memory_vector_outbox` 同事务写入；Worker：`uv run python scripts/memory_vector_worker.py`
-- Semantic：**Neo4j 同事务**写 `SemanticMemory` + `SemanticOutboxEvent`；Worker 按 `version` embed → Milvus；读路径补 `embedding_status=pending`（read-your-writes）
-- 测试/无 `DATABASE_URL` 时 episodic 仍使用内存 outbox；详见 [memory/consistency_backlog.md](memory/consistency_backlog.md)
-
-**MemoryTool 已实现 action**
-- `add`、`search`（含 working）、`summary`、`stats`、`update`、`remove`、`forget`、`consolidate`、`clear_all`
-- `forget` 当前主要支持 working（过期清理 + 低重要性删除）
-- `consolidate` 将当前会话 working 记忆写入 episodic（需同时启用两类记忆）
-- `clear_all` 对 semantic 按用户（及可选 session）批量删除（Neo4j + Milvus）
-
-**PerceptualMemory**
-- 第一版实现已支持多模态路由（text/image/audio/video/file），图像和音频当前使用文本代理（caption/transcript），尚未接入真实多模态 embedding 模型（CLIP/CLAP）
-- 跨模态检索当前是代理文本向量检索，不是统一向量空间的真实跨模态检索
-
-**其他已知问题**
-- `_add_memory` 会对调用方传入的 metadata dict 执行 `.update()` 产生副作用
-- MemoryTool 默认仅启用 `working` 类型，episodic/semantic 需显式传入
-- 向量维度变更（更换 embedding 模型）会导致 Milvus collection 维度不匹配
-- InMemoryStore 按类型索引虽然存在，但 WorkingMemory 仍保留旧模块引用，未全局统一
-
-**跨模块集成**
-- 四类 Agent + MemoryTool 均已提供 `with_agent_tools` 工厂（memory 默认关闭，需 `enable_memory=True`）
-- 已有 `tests/test_simple_agent_memory.py`、`tests/test_react_agent_with_tools.py`、`tests/test_agents_with_memory.py`
-- 真机脚本：`scripts/try_memory_agent.py`（tool / simple / react）
-
-完整妥协项详见 [memory/implementation_status.md](memory/implementation_status.md)。
+- 记忆系统：[memory/implementation_status.md](memory/implementation_status.md)
+- RAG：[rag/implementation_status.md](rag/implementation_status.md)
+- 一致性保证：[memory/consistency_backlog.md](memory/consistency_backlog.md)

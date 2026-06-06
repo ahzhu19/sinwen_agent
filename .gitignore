@@ -7,7 +7,7 @@ wheels/
 *.egg-info
 .env
 # docs
-docs/
+docs/superpowers/
 # Virtual environments
 .venv
 # Testing
