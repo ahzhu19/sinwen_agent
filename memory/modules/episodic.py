@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from ..config import MemoryConfig
+from ..records import episodic_event_to_record
 from ..storage.postgres_store import PostgresEpisodicMemoryStore
 from ..storage.vector_outbox import (
     VectorOutbox,
@@ -161,7 +162,7 @@ class EpisodicMemory:
         event = self._store.get(memory_id)
         if event is None:
             return None
-        return _episodic_event_to_record(event)
+        return episodic_event_to_record(event)
 
     def list_timeline(
         self,
@@ -173,7 +174,7 @@ class EpisodicMemory:
             session_id=session_id,
             limit=limit,
         )
-        return [_episodic_event_to_record(event) for event in events]
+        return [episodic_event_to_record(event) for event in events]
 
     def retrieve(
         self,
@@ -198,7 +199,7 @@ class EpisodicMemory:
 
         scored: list[tuple[float, MemoryRecord]] = []
         for event in events:
-            record = _episodic_event_to_record(event)
+            record = episodic_event_to_record(event)
             vector_score = score_by_id.get(event.id, 0.0)
             occurred_at = record.metadata.get(
                 "occurred_at",
@@ -242,18 +243,3 @@ class EpisodicMemory:
             and isinstance(self._store, PostgresEpisodicMemoryStore)
             and self.config.enable_persistent_vector_outbox
         )
-
-
-def _episodic_event_to_record(event: Any) -> MemoryRecord:
-    meta = dict(event.metadata)
-    meta.setdefault("session_id", event.session_id)
-    meta.setdefault("occurred_at", event.occurred_at.timestamp())
-    meta.setdefault("created_at", event.created_at.timestamp())
-    meta.setdefault("sequence_no", event.sequence_no)
-    return MemoryRecord(
-        id=event.id,
-        content=event.content,
-        memory_type="episodic",
-        importance=event.importance,
-        metadata=meta,
-    )

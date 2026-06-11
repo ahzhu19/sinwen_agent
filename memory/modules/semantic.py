@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from ..concept_extractor import ConceptExtractor, create_concept_extractor, extract_concepts
 from ..config import MemoryConfig
+from ..records import semantic_fact_to_record
 from ..semantic_outbox_processor import SemanticOutboxProcessor
 from .base import MemoryRecord
 from .semantic_retrieve import retrieve_with_rrf
@@ -132,6 +133,12 @@ class SemanticMemory:
             session_id=session_id,
         )
 
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        facts = self._store.get_many([memory_id])
+        if not facts:
+            return None
+        return semantic_fact_to_record(facts[0])
+
     def remove(self, memory_id: str) -> None:
         if not hasattr(self._store, "delete_memory_with_outbox"):
             raise ValueError("语义记忆 store 需实现 delete_memory_with_outbox")
@@ -153,7 +160,7 @@ class SemanticMemory:
             limit=limit,
             session_id=session_id,
         )
-        return [_semantic_fact_to_record(fact) for fact in facts]
+        return [semantic_fact_to_record(fact) for fact in facts]
 
     def remove_all_for_user(self, session_id: str | None = None) -> int:
         facts = self._store.list_by_user(
@@ -167,15 +174,3 @@ class SemanticMemory:
 
     def count_for_user(self, session_id: str | None = None) -> int:
         return self._store.count_by_user(self.user_id, session_id=session_id)
-
-
-def _semantic_fact_to_record(fact: Any) -> MemoryRecord:
-    metadata = dict(fact.metadata)
-    metadata.setdefault("concepts", list(fact.concepts))
-    return MemoryRecord(
-        id=fact.id,
-        content=fact.content,
-        memory_type="semantic",
-        importance=fact.importance,
-        metadata=metadata,
-    )

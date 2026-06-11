@@ -35,14 +35,6 @@ class SemanticMemoryStore(Protocol):
     def get_many(self, memory_ids: list[str]) -> list[SemanticFact]:
         ...
 
-    def score_related_memories(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        memory_ids: list[str],
-    ) -> dict[str, float]:
-        ...
-
     def compute_graph_relevance(
         self,
         user_id: str,
@@ -64,18 +56,6 @@ class SemanticMemoryStore(Protocol):
         ...
 
     def count_by_user(self, user_id: str, session_id: str | None = None) -> int:
-        ...
-
-    def expand_graph_candidates(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        *,
-        max_hops: int = 2,
-        hop_decay: float = 0.65,
-        limit: int = 20,
-        session_id: str | None = None,
-    ) -> dict[str, float]:
         ...
 
     def write_memory_with_outbox(
@@ -219,20 +199,6 @@ class Neo4jSemanticMemoryStore:
         facts.sort(key=lambda fact: order.get(fact.id, len(memory_ids)))
         return facts
 
-    def score_related_memories(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        memory_ids: list[str],
-    ) -> dict[str, float]:
-        scores = self.compute_graph_relevance(
-            user_id,
-            query_concepts,
-            max_hops=1,
-            session_id=None,
-        )
-        return {memory_id: scores.get(memory_id, 0.0) for memory_id in memory_ids}
-
     def compute_graph_relevance(
         self,
         user_id: str,
@@ -328,27 +294,6 @@ class Neo4jSemanticMemoryStore:
             scores = self._filter_scores_by_session(user_id, scores, session_id)
 
         return scores
-
-    def expand_graph_candidates(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        *,
-        max_hops: int = 2,
-        hop_decay: float = 0.65,
-        limit: int = 20,
-        session_id: str | None = None,
-        relation_weights: dict[str, float] | None = None,
-    ) -> dict[str, float]:
-        scores = self.compute_graph_relevance(
-            user_id,
-            query_concepts,
-            max_hops=max_hops,
-            hop_decay=hop_decay,
-            relation_weights=relation_weights,
-            session_id=session_id,
-        )
-        return _top_graph_scores(scores, limit)
 
     def _filter_scores_by_session(
         self,
@@ -816,13 +761,6 @@ def create_semantic_store(config: MemoryConfig) -> Neo4jSemanticMemoryStore:
         password=config.neo4j_password,
         database=config.neo4j_database,
     )
-
-
-def _top_graph_scores(scores: dict[str, float], limit: int) -> dict[str, float]:
-    if limit <= 0:
-        return {}
-    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
-    return dict(ordered)
 
 
 def _normalize_concepts(concepts: list[str]) -> list[str]:

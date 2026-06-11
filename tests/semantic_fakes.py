@@ -228,20 +228,6 @@ class FakeSemanticStore:
             if memory_id in self.facts and not self.facts[memory_id].deleted
         ]
 
-    def score_related_memories(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        memory_ids: list[str],
-    ) -> dict[str, float]:
-        _ = user_id, query_concepts
-        scores = self.compute_graph_relevance(
-            user_id,
-            query_concepts,
-            max_hops=1,
-        )
-        return {memory_id: scores.get(memory_id, 0.0) for memory_id in memory_ids}
-
     def compute_graph_relevance(
         self,
         user_id: str,
@@ -259,24 +245,6 @@ class FakeSemanticStore:
         for memory_id, score in self.expanded_scores.items():
             scores[memory_id] = max(scores.get(memory_id, 0.0), score)
         return scores
-
-    def expand_graph_candidates(
-        self,
-        user_id: str,
-        query_concepts: list[str],
-        *,
-        max_hops: int = 2,
-        hop_decay: float = 0.65,
-        limit: int = 20,
-        session_id: str | None = None,
-    ) -> dict[str, float]:
-        _ = user_id, query_concepts, max_hops, hop_decay, session_id
-        ordered = sorted(
-            self.expanded_scores.items(),
-            key=lambda item: item[1],
-            reverse=True,
-        )[:limit]
-        return dict(ordered)
 
     def list_by_user(
         self,

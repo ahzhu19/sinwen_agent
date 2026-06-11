@@ -573,22 +573,6 @@ class MemoryManager:
         memory_module = self.memory_modules.get(memory_type)
         if memory_module is None:
             return None
-        if memory_type == "working":
-            return memory_module.store.get(memory_id)
-        if memory_type == "episodic" and hasattr(memory_module, "get"):
+        if hasattr(memory_module, "get"):
             return memory_module.get(memory_id)
-        if memory_type == "perceptual" and hasattr(memory_module, "_store"):
-            item = memory_module._store.get(memory_id)
-            if item is None:
-                return None
-            from .modules.perceptual import _perceptual_item_to_record
-
-            return _perceptual_item_to_record(item)
-        if memory_type == "semantic":
-            facts = memory_module._store.get_many([memory_id])
-            if not facts:
-                return None
-            from .modules.semantic import _semantic_fact_to_record
-
-            return _semantic_fact_to_record(facts[0])
         return None

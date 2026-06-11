@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from memory.protocols import MemoryServiceProtocol
 from tools.builtin.calculator import CalculatorTool
 from tools.builtin.memory_tool import MemoryTool
 from tools.builtin.rag_tool import RagTool
@@ -19,6 +20,7 @@ def create_agent_tool_registry(
     search_routing: str = "keyword",
     memory_types: list[str] | None = None,
     memory_user_id: str = "default_user",
+    memory_service: MemoryServiceProtocol | None = None,
 ) -> ToolRegistry:
     """创建 Agent 可用的工具注册表。
 
@@ -33,7 +35,11 @@ def create_agent_tool_registry(
     if enable_memory:
         types = memory_types or ["working"]
         registry.register_tool(
-            MemoryTool(user_id=memory_user_id, memory_types=types),
+            MemoryTool(
+                user_id=memory_user_id,
+                memory_types=types,
+                memory_service=memory_service,
+            ),
         )
     if enable_rag:
         registry.register_tool(RagTool())

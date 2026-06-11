@@ -4,7 +4,9 @@ import pytest
 
 from memory.config import MemoryConfig
 from memory.manager import MemoryManager
+from memory.service import MemoryService
 from tests.memory_fakes import FakeMemoryManager, FailingMemoryManager
+from tools.agent_registry import create_agent_tool_registry
 from tools.builtin.memory_tool import MemoryTool
 
 
@@ -158,6 +160,38 @@ def test_add_memory_returns_clear_error_when_manager_fails() -> None:
     assert result == "❌ 添加记忆失败: database unavailable"
 
 
+def test_memory_tool_accepts_memory_service() -> None:
+    manager = FakeMemoryManager("service_mem_123")
+    service = MemoryService(manager=manager)
+    tool = MemoryTool(user_id="user123", memory_service=service)
+
+    result = tool.execute(
+        "add",
+        content="用户喜欢 Python",
+        memory_type="working",
+        importance=0.8,
+    )
+
+    assert "service_" in result
+    assert manager.added[0]["content"] == "用户喜欢 Python"
+
+
+def test_agent_tool_registry_accepts_memory_service() -> None:
+    service = MemoryService(manager=FakeMemoryManager("registry_mem_123"))
+    registry = create_agent_tool_registry(
+        enable_search=False,
+        enable_calculator=False,
+        enable_rag=False,
+        enable_memory=True,
+        memory_service=service,
+    )
+
+    tool = registry._tools["memory"]
+    result = tool.execute("add", content="hello", memory_type="working")
+
+    assert "registry" in result
+
+
 def test_memory_tool_creates_manager_from_config_and_memory_types() -> None:
     config = MemoryConfig(working_memory_capacity=20)
 
@@ -184,6 +218,7 @@ def test_memory_tool_keeps_injected_manager() -> None:
     tool = MemoryTool(user_id="user123", memory_manager=manager)
 
     assert tool.memory_manager is manager
+    assert tool.memory_service.manager is manager
     assert tool.memory_types == ["working"]
 
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from memory.config import MemoryConfig
 from memory.manager import MemoryManager
 from memory.modules.base import MemoryRecord
+from memory.protocols import MemoryManagerProtocol, MemoryServiceProtocol
+from memory.service import MemoryService
 from tools.base import Tool
 
 
@@ -28,78 +30,6 @@ SUPPORTED_MEMORY_ACTIONS = (
 )
 
 
-class MemoryManagerProtocol(Protocol):
-    def add_memory(
-        self,
-        content: str,
-        memory_type: str,
-        importance: float,
-        metadata: dict[str, Any],
-    ) -> str:
-        ...
-
-    def search_memory(
-        self,
-        query: str,
-        memory_type: str,
-        limit: int = 5,
-        session_id: str | None = None,
-    ) -> list[Any]:
-        ...
-
-    def remove_memory(self, memory_id: str, memory_type: str) -> None:
-        ...
-
-    def update_memory(
-        self,
-        memory_id: str,
-        memory_type: str,
-        *,
-        content: str | None = None,
-        importance: float | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> str:
-        ...
-
-    def memory_stats(self, session_id: str | None = None) -> dict[str, Any]:
-        ...
-
-    def memory_summary(
-        self,
-        session_id: str | None = None,
-        limit_per_type: int = 3,
-    ) -> dict[str, list[Any]]:
-        ...
-
-    def forget_memories(
-        self,
-        memory_type: str = "working",
-        *,
-        strategy: str = "importance",
-        session_id: str | None = None,
-        importance_threshold: float | None = None,
-        older_than_days: int | None = None,
-        limit: int | None = None,
-    ) -> int:
-        ...
-
-    def consolidate_working_to_episodic(
-        self,
-        session_id: str,
-        *,
-        importance_threshold: float = 0.5,
-    ) -> list[str]:
-        ...
-
-    def clear_memories(
-        self,
-        memory_type: str | None = None,
-        *,
-        session_id: str | None = None,
-    ) -> dict[str, int]:
-        ...
-
-
 class MemoryTool(Tool):
     """记忆系统统一工具入口。"""
 
@@ -109,6 +39,7 @@ class MemoryTool(Tool):
         session_id: str | None = None,
         memory_config: MemoryConfig | None = None,
         memory_types: list[str] | None = None,
+        memory_service: MemoryServiceProtocol | None = None,
         memory_manager: MemoryManagerProtocol | None = None,
     ) -> None:
         self.user_id = user_id
@@ -116,14 +47,29 @@ class MemoryTool(Tool):
         self.memory_config = memory_config or MemoryConfig.from_env()
         self.memory_types = list(memory_types or DEFAULT_MEMORY_TYPES)
         self._validate_memory_types(self.memory_types)
-        self.memory_manager = memory_manager or MemoryManager(
-            config=self.memory_config,
-            user_id=user_id,
-            enable_working="working" in self.memory_types,
-            enable_episodic="episodic" in self.memory_types,
-            enable_semantic="semantic" in self.memory_types,
-            enable_perceptual="perceptual" in self.memory_types,
-        )
+        if memory_service is not None:
+            self.memory_service = memory_service
+        elif memory_manager is not None:
+            self.memory_service = MemoryService(
+                user_id=user_id,
+                config=self.memory_config,
+                memory_types=self.memory_types,
+                manager=memory_manager,
+            )
+        else:
+            self.memory_service = MemoryService(
+                user_id=user_id,
+                config=self.memory_config,
+                memory_types=self.memory_types,
+            )
+
+    @property
+    def memory_manager(self) -> MemoryManagerProtocol:
+        """Backward-compatible access to the underlying manager."""
+        manager = getattr(self.memory_service, "manager", None)
+        if manager is None:
+            raise AttributeError("memory_service has no manager")
+        return manager
 
     @property
     def name(self) -> str:
@@ -246,7 +192,7 @@ class MemoryTool(Tool):
             payload.setdefault("session_id", session_id)
             payload.setdefault("timestamp", datetime.now().isoformat())
 
-            memory_id = self.memory_manager.add_memory(
+            memory_id = self.memory_service.add(
                 content=content,
                 memory_type=memory_type,
                 importance=importance,
@@ -270,7 +216,7 @@ class MemoryTool(Tool):
             if memory_type not in self.memory_types:
                 return f"❌ 搜索失败: 未启用记忆类型 {memory_type}"
 
-            results = self.memory_manager.search_memory(
+            results = self.memory_service.search(
                 query=query,
                 memory_type=memory_type,
                 limit=limit,
@@ -286,7 +232,7 @@ class MemoryTool(Tool):
         _ = kwargs
         try:
             session_id = self._ensure_session_id()
-            summary = self.memory_manager.memory_summary(
+            summary = self.memory_service.summary(
                 session_id=session_id,
                 limit_per_type=limit,
             )
@@ -307,7 +253,7 @@ class MemoryTool(Tool):
     def _get_stats(self, **kwargs: Any) -> str:
         _ = kwargs
         try:
-            stats = self.memory_manager.memory_stats(session_id=self.current_session_id)
+            stats = self.memory_service.stats(session_id=self.current_session_id)
             counts = stats.get("counts", {})
             parts = [
                 f"用户 {stats.get('user_id')} 记忆统计",
@@ -333,7 +279,7 @@ class MemoryTool(Tool):
         try:
             if not memory_id.strip():
                 return "❌ 更新失败: memory_id 不能为空"
-            updated_id = self.memory_manager.update_memory(
+            updated_id = self.memory_service.update(
                 memory_id.strip(),
                 memory_type,
                 content=content or None,
@@ -354,7 +300,7 @@ class MemoryTool(Tool):
         try:
             if not memory_id.strip():
                 return "❌ 删除失败: memory_id 不能为空"
-            self.memory_manager.remove_memory(memory_id.strip(), memory_type)
+            self.memory_service.remove(memory_id.strip(), memory_type)
             return f"✅ 已删除 {memory_type} 记忆 {memory_id[:8]}..."
         except Exception as exc:
             return f"❌ 删除失败: {exc}"
@@ -370,7 +316,7 @@ class MemoryTool(Tool):
     ) -> str:
         _ = kwargs
         try:
-            removed = self.memory_manager.forget_memories(
+            removed = self.memory_service.forget(
                 memory_type,
                 strategy=strategy,
                 session_id=self.current_session_id,
@@ -394,7 +340,7 @@ class MemoryTool(Tool):
         _ = kwargs
         try:
             session_id = self._ensure_session_id()
-            created_ids = self.memory_manager.consolidate_working_to_episodic(
+            created_ids = self.memory_service.consolidate(
                 session_id,
                 importance_threshold=importance_threshold,
             )
@@ -414,7 +360,7 @@ class MemoryTool(Tool):
     ) -> str:
         _ = kwargs
         try:
-            cleared = self.memory_manager.clear_memories(
+            cleared = self.memory_service.clear(
                 memory_type=memory_type or None,
                 session_id=self.current_session_id,
             )

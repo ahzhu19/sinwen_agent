@@ -6,8 +6,6 @@ dist/
 wheels/
 *.egg-info
 .env
-# docs
-docs/superpowers/
 # Virtual environments
 .venv
 # Testing

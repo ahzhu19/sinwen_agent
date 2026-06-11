@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..config import MemoryConfig
+from ..records import perceptual_item_to_record
 from ..storage.vector_outbox import VectorWriteError
 from ..vector_outbox_processor import VectorOutboxProcessor
 from .base import MemoryRecord
@@ -228,10 +229,16 @@ class PerceptualMemory:
             recency_score = self._calculate_recency_score(item.created_at)
             importance_weight = 0.8 + (item.importance * 0.4)
             final_score = (vector_score * 0.8 + recency_score * 0.2) * importance_weight
-            scored.append((final_score, _perceptual_item_to_record(item)))
+            scored.append((final_score, perceptual_item_to_record(item)))
 
         scored.sort(key=lambda entry: entry[0], reverse=True)
         return [record for _, record in scored[:limit]]
+
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        item = self._store.get(memory_id)
+        if item is None or item.user_id != self.user_id:
+            return None
+        return perceptual_item_to_record(item)
 
     def remove(self, memory_id: str) -> None:
         item = self._store.get(memory_id)
@@ -308,17 +315,3 @@ class PerceptualMemory:
                 f"不支持的感知模态 '{modality}'，允许: {', '.join(sorted(_ALLOWED_MODALITIES))}"
             )
         return value
-
-
-def _perceptual_item_to_record(item: Any) -> MemoryRecord:
-    metadata = dict(item.metadata)
-    metadata.setdefault("modality", item.modality)
-    metadata.setdefault("raw_data", item.raw_data)
-    metadata.setdefault("timestamp", item.created_at)
-    return MemoryRecord(
-        id=item.id,
-        content=item.content,
-        memory_type="perceptual",
-        importance=item.importance,
-        metadata=metadata,
-    )

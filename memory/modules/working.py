@@ -38,6 +38,9 @@ class WorkingMemory(BaseMemory):
         ]
         return sorted(records, key=lambda record: record.metadata.get("created_at", 0))
 
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        return self.store.get(memory_id)
+
     def retrieve(
         self,
         query: str,

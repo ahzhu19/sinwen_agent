@@ -2,18 +2,17 @@
 
 > 生成日期：2026-06-03  
 > 用途：逐项讨论、排期、决策。每条带 **ID**，提问时可引用（如「C-04 怎么处理？」）。  
-> 详细记忆台账见 [memory/consistency_backlog.md](../memory/consistency_backlog.md)。
+> 问题 ID 可引用（如「G-02 怎么处理？」）。  
+> 模块实现摘要见 [memory/implementation_status.md](../memory/implementation_status.md)、[rag/implementation_status.md](../rag/implementation_status.md)。
 
 ---
 
 ## 如何使用本文档
 
-1. 按 **状态** 筛选：`open`（未解决）、`mitigated`（部分缓解）、`accepted`（已知妥协）、`done`（已解决）。
+1. 按 **状态** 筛选：`open` / `mitigated` / `accepted` / `done`。
 2. 按 **优先级** 排序：P0 > P1 > P2 > P3。
-3. 讨论某条时，复制其 **ID** 与「可讨论的问题」小节。
 
-**测试基线**（最近一次）：`uv run pytest tests/ -q` → 156 passed, 3 skipped。  
-**工作区**：记忆系统大改 diff 尚未提交 git。
+**测试基线**：`uv run pytest tests/ -q` → 178 passed, 3 skipped。
 
 ---
 
@@ -108,13 +107,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **问题** | 语义检索中图相关逻辑可能执行两次 Cypher/打分路径。 |
-| **当前行为** | `expand_graph_candidates` 与 `score_related_memories` 并存。 |
-| **目标方案** | 合并为一次图检索 API，减少延迟与重复。 |
-| **相关代码** | `memory/storage/neo4j_store.py`、`memory/modules/semantic.py` |
-| **可讨论的问题** | 合并后评分公式是否变化？要不要 benchmark？ |
+| **当前行为** | `compute_graph_relevance` 统一 hop1/hop2；`expand_graph_candidates` / `score_related_memories` 为薄包装。 |
 
 ---
 
@@ -122,12 +117,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **问题** | 仅从图扩展进来的记忆没有 Milvus 相似度，排序主要靠 graph 分。 |
-| **当前行为** | 公式 `(vector * 0.7 + graph * 0.3) * importance_weight`，扩展候选 vector 项为 0。 |
-| **目标方案** | 文档化策略；或提高 graph 权重下限 / 对纯图候选单独排序。 |
-| **可讨论的问题** | 产品上「纯概念关联」排前面是否合理？ |
+| **当前行为** | 向量榜 + 图榜 **RRF** 融合（`semantic_retrieve.py`，`SEMANTIC_RRF_K`），再乘 importance。 |
 
 ---
 
@@ -135,12 +127,10 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `mitigated` |
 | **优先级** | P2 |
-| **问题** | RELATES_TO 与共现桥接均为启发式，关系类型权重不可配置。 |
-| **当前行为** | `SEMANTIC_GRAPH_HOP_DECAY`、`SEMANTIC_GRAPH_MAX_HOPS` 可配。 |
-| **目标方案** | 按关系类型配置权重（implementation_status 已列）。 |
-| **可讨论的问题** | 需要哪些关系类型？默认值从哪来？ |
+| **当前行为** | `SEMANTIC_GRAPH_RELATION_WEIGHTS` 配置 RELATES_TO / CO_OCCURRENCE；写入时 RELATES_TO.weight 仍固定 1.0。 |
+| **剩余** | 写入时动态更新关系 weight（PMI 等）。 |
 
 ---
 
@@ -157,15 +147,14 @@
 
 ## 四、记忆系统 — 产品能力缺口（open）
 
-### M-01 · forget 仅支持 working
+### M-01 · forget 策略
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done`（基础版） |
 | **优先级** | P2 |
-| **问题** | `forget` 只做 working 过期 + 低重要性删除；episodic/semantic/perceptual 无策略。 |
-| **相关代码** | `memory/manager.py` → `forget_memories` |
-| **可讨论的问题** | 其他类型需要哪些 forget 语义（按时间？按 session？）？ |
+| **当前行为** | 四类记忆支持 `forget`；策略 `importance` / `importance_ttl` / `session`；semantic 默认单次上限 50 条。 |
+| **剩余** | dry-run 预览、更保守的 semantic 删除确认。 |
 
 ---
 
@@ -181,26 +170,14 @@
 
 ---
 
-### M-03 · auto_classify 未实现
-
-| 字段 | 内容 |
-|------|------|
-| **状态** | `open` |
-| **优先级** | P3 |
-| **问题** | `add_memory(..., auto_classify=True)` 为 TODO，当前忽略。 |
-| **相关代码** | `memory/manager.py` |
-| **可讨论的问题** | 实现分类器还是删除参数？ |
-
----
-
 ### M-04 · 更换 embedding 模型导致 Milvus 维度不匹配
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `mitigated` |
 | **优先级** | P2 |
-| **问题** | 换 `EMBED_MODEL_NAME` 后旧 collection 维度不一致。 |
-| **可讨论的问题** | 是否需要 reindex 脚本 / 版本化 collection 名？ |
+| **当前行为** | `USE_VERSIONED_MILVUS_COLLECTIONS` 版本化 collection；Milvus 维度 guard；`scripts/memory_reindex.py`；episodic `embedding_model` 列。 |
+| **剩余** | RAG/perceptual collection 版本化、reindex 真机 runbook。 |
 
 ---
 
@@ -232,10 +209,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `mitigated` |
 | **优先级** | P3 |
-| **问题** | Tool 与 Manager 各有一份 Protocol 定义。 |
-| **目标方案** | 单文件共享或 Tool 直接依赖 `MemoryManager`。 |
+| **当前行为** | `MemoryServiceProtocol` + `MemoryTool` 适配器；`memory_manager=` 构造参数保留兼容。 |
 
 ---
 
@@ -259,6 +235,17 @@
 | **优先级** | P3 |
 | **问题** | 工厂 + CRUD + 统计 + 清空 + outbox 在同一文件（~500 行）。 |
 | **目标方案** | 拆 `operations` / `factory`。 |
+
+---
+
+### A-07 · Agent Runtime Memory Hooks
+
+| 字段 | 内容 |
+|------|------|
+| **状态** | `mitigated`（基础版） |
+| **优先级** | P2 |
+| **当前行为** | `MemoryHookConfig` 默认检索 working+episodic；`record_interaction` 单条合并 Q/A；`enable_memory=True` 默认开启 hooks。 |
+| **剩余** | 其他 Agent 类型、Reflection/PlanAndSolve 专用策略（AG-01/02）。 |
 
 ---
 
@@ -319,8 +306,7 @@
 |------|------|
 | **状态** | `open` |
 | **优先级** | P3 |
-| **问题** | MVP 仅本地单文件；设计文档已 defer。 |
-| **相关文档** | [docs/superpowers/specs/2026-06-03-rag-system-design.md](./superpowers/specs/2026-06-03-rag-system-design.md) |
+| **问题** | MVP 仅本地单文件。 |
 
 ---
 
@@ -405,12 +391,10 @@
 
 ## 十一、建议讨论顺序（可选）
 
-1. **OPS-01 / C-04** — 生产部署与 Semantic 一致性是否可接受  
-2. **G-01** — RAG 是否复用 memory outbox  
-3. **R-03 / R-04** — 语义检索质量与排序策略  
-4. **A-04** — 集成测试与 CI  
-5. **AG-01~03** — Agent 产品闭环（按你的排期）  
-6. **F-05 / P-01** — 多模态远期  
+1. **G-02 / A-04** — RAG reranker 与 Agent 真机集成测试  
+2. **OPS-02** — Prometheus 告警  
+3. **AG-01~02** — Agent 记忆沉淀（产品排期）  
+4. **F-05** — 多模态远期  
 
 ---
 
@@ -418,12 +402,11 @@
 
 | 文档 | 路径 |
 |------|------|
-| 记忆一致性 backlog | [memory/consistency_backlog.md](../memory/consistency_backlog.md) |
+| 记忆架构 | [docs/architecture/memory.md](./architecture/memory.md) |
 | 记忆实现状态 | [memory/implementation_status.md](../memory/implementation_status.md) |
 | RAG 实现状态 | [rag/implementation_status.md](../rag/implementation_status.md) |
-| 项目 README 未完成节 | [README.md](../README.md) |
-| 提示词目录 | [prompts/](../prompts/) |
-| RAG 设计 spec | [docs/superpowers/specs/2026-06-03-rag-system-design.md](./superpowers/specs/2026-06-03-rag-system-design.md) |
+| 项目 README | [README.md](../README.md) |
+| 提示词 | [prompts/](../prompts/) |
 
 ---
 

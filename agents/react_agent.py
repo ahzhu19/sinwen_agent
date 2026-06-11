@@ -9,8 +9,18 @@ from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
+from memory.hooks import MemoryHookConfig
+from memory.protocols import MemoryServiceProtocol
 
 from prompts import DEFAULT_REACT_SYSTEM_PROMPT, REACT_USER_PROMPT_TEMPLATE, render_prompt
+
+from .memory_runtime import (
+    append_memory_context,
+    build_memory_hook_config,
+    maybe_record_interaction,
+    resolve_memory_context,
+    resolve_memory_hooks_enabled,
+)
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -76,12 +86,16 @@ class ReActAgent(Agent):
         user_prompt_template: str = REACT_USER_PROMPT_TEMPLATE,
         config: Optional[Config] = None,
         max_steps: int = 10,
+        memory_service: MemoryServiceProtocol | None = None,
+        memory_hooks: MemoryHookConfig | None = None,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.tool_registry = tool_registry
         self.user_prompt_template = user_prompt_template
         self.max_steps = max_steps
         self.react_trace: list[str] = []
+        self.memory_service = memory_service
+        self.memory_hooks = memory_hooks
 
     @classmethod
     def with_agent_tools(
@@ -98,9 +112,21 @@ class ReActAgent(Agent):
         enable_rag: bool = True,
         max_steps: int = 10,
         memory_types: list[str] | None = None,
+        enable_memory_hooks: bool | None = None,
+        memory_user_id: str = "default_user",
+        memory_hook_session_id: str | None = None,
+        memory_service: MemoryServiceProtocol | None = None,
     ) -> "ReActAgent":
         """使用默认工具集（含可选 memory / rag）创建 ReActAgent。"""
+        from memory.service import MemoryService
         from tools.agent_registry import create_agent_tool_registry
+
+        hooks_enabled = resolve_memory_hooks_enabled(enable_memory, enable_memory_hooks)
+        service = memory_service
+        if service is None and (enable_memory or hooks_enabled):
+            service = MemoryService(user_id=memory_user_id, memory_types=memory_types)
+
+        hooks = build_memory_hook_config(memory_hook_session_id) if hooks_enabled else None
 
         registry = create_agent_tool_registry(
             enable_search=enable_search,
@@ -108,6 +134,8 @@ class ReActAgent(Agent):
             enable_memory=enable_memory,
             enable_rag=enable_rag,
             memory_types=memory_types,
+            memory_user_id=memory_user_id,
+            memory_service=service,
         )
         return cls(
             name=name,
@@ -117,17 +145,24 @@ class ReActAgent(Agent):
             user_prompt_template=user_prompt_template,
             config=config,
             max_steps=max_steps,
+            memory_service=service,
+            memory_hooks=hooks,
         )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
         """运行文本 ReAct 循环，返回最终答案。"""
         self.react_trace = []
         temperature = kwargs.pop("temperature", self.config.temperature)
+        memory_context = resolve_memory_context(
+            self.memory_service,
+            self.memory_hooks,
+            input_text,
+        )
 
         print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
         for current_step in range(1, self.max_steps + 1):
             print(f"\n--- 第 {current_step} 步 ---")
-            messages = self._build_messages(input_text)
+            messages = self._build_messages(input_text, memory_context=memory_context)
             response_text = self.llm.invoke(
                 messages,
                 temperature=temperature,
@@ -138,6 +173,12 @@ class ReActAgent(Agent):
             if step.is_finish:
                 final_answer = str(step.action_input or "")
                 self._save_final_answer(input_text, final_answer)
+                maybe_record_interaction(
+                    self.memory_service,
+                    self.memory_hooks,
+                    input_text,
+                    final_answer,
+                )
                 print(f"✅ {self.name} ReAct 响应完成")
                 return final_answer
 
@@ -152,9 +193,20 @@ class ReActAgent(Agent):
 
         final_answer = "抱歉，我无法在限定步数内完成这个任务。"
         self._save_final_answer(input_text, final_answer)
+        maybe_record_interaction(
+            self.memory_service,
+            self.memory_hooks,
+            input_text,
+            final_answer,
+        )
         return final_answer
 
-    def _build_messages(self, input_text: str) -> list[dict[str, str]]:
+    def _build_messages(
+        self,
+        input_text: str,
+        *,
+        memory_context: str | None = None,
+    ) -> list[dict[str, str]]:
         history = "\n".join(self.react_trace) if self.react_trace else "无"
         user_prompt = render_prompt(
             self.user_prompt_template,
@@ -163,8 +215,9 @@ class ReActAgent(Agent):
             history=history,
         )
         messages: list[dict[str, str]] = []
-        if self.system_prompt:
-            messages.append({"role": "system", "content": self.system_prompt})
+        system_content = append_memory_context(self.system_prompt, memory_context)
+        if system_content:
+            messages.append({"role": "system", "content": system_content})
         messages.append({"role": "user", "content": user_prompt})
         return messages
 
