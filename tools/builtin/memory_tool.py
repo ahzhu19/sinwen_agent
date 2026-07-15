@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -182,7 +184,7 @@ class MemoryTool(Tool):
     ) -> str:
         try:
             session_id = self._ensure_session_id()
-            payload = dict(metadata)
+            payload = copy.deepcopy(metadata)
 
             if memory_type == "perceptual" and file_path:
                 inferred = modality or self._infer_modality(file_path)
@@ -284,7 +286,7 @@ class MemoryTool(Tool):
                 memory_type,
                 content=content or None,
                 importance=importance,
-                metadata=dict(metadata) if metadata else None,
+                metadata=copy.deepcopy(metadata) if metadata else None,
             )
             return f"✅ 记忆已更新 (ID: {updated_id[:8]}...)"
         except Exception as exc:
@@ -312,25 +314,53 @@ class MemoryTool(Tool):
         strategy: str = "importance",
         older_than_days: int | None = None,
         limit: int | None = None,
+        dry_run: bool = False,
         **kwargs: Any,
     ) -> str:
         _ = kwargs
         try:
-            removed = self.memory_service.forget(
+            result = self.memory_service.forget(
                 memory_type,
                 strategy=strategy,
                 session_id=self.current_session_id,
                 importance_threshold=importance_threshold,
                 older_than_days=older_than_days,
                 limit=limit,
+                dry_run=dry_run,
             )
             threshold = importance_threshold if importance_threshold is not None else "默认"
+            if dry_run:
+                return self._format_dry_run_preview(
+                    result, memory_type, strategy=strategy, threshold=threshold
+                )
+            removed = result  # type: ignore[assignment]
             return (
                 f"✅ 已遗忘 {removed} 条 {memory_type} 记忆"
                 f"（strategy={strategy}, 阈值 <= {threshold}）"
             )
         except Exception as exc:
             return f"❌ 遗忘失败: {exc}"
+
+    def _format_dry_run_preview(
+        self,
+        records: Any,
+        memory_type: str,
+        *,
+        strategy: str,
+        threshold: Any,
+    ) -> str:
+        """格式化 dry-run 预览：列出将删除的记忆，不执行删除。"""
+        record_list = records if isinstance(records, list) else []
+        header = (
+            f"🔍 预览：将遗忘 {len(record_list)} 条 {memory_type} 记忆"
+            f"（strategy={strategy}, 阈值 <= {threshold}，dry-run 未实际删除）"
+        )
+        if not record_list:
+            return header
+        lines = [header]
+        for index, record in enumerate(record_list, start=1):
+            lines.append(self._format_record_line(index, record))
+        return "\n".join(lines)
 
     def _consolidate_memory(
         self,

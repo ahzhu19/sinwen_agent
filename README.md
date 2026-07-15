@@ -2,7 +2,7 @@
 
 从零手写 LLM Agent，不依赖 LangChain / AutoGPT。推理循环、消息管理、工具调用全部显式实现。
 
-实际代码量：**核心 ~6000 行，测试 ~4000 行**，当前 **151 测试通过**。
+实际代码量：**核心 ~6000 行，测试 ~4000 行**，当前 **276 测试通过**。
 
 ## 项目结构
 
@@ -14,7 +14,7 @@ context/        上下文构建：Gather → Select → Structure → Compress
 memory/         四种记忆 + Service 层 + Runtime Hooks + outbox 事务
 rag/            MarkItDown 文档转换 → 分块 → embedding → Milvus 检索
 prompts/        Agent/记忆/RAG 的 LLM 提示词
-tests/          单元测试（151 passed, 3 skipped）
+tests/          单元测试（276 passed, 3 skipped）
 scripts/        真机试用脚本
 ```
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -62,7 +63,7 @@ class InMemoryStore:
         record = self._records.get(memory_id)
         if record is None:
             return None
-        new_metadata = dict(record.metadata)
+        new_metadata = copy.deepcopy(record.metadata)
         if metadata:
             new_metadata.update(metadata)
         updated = MemoryRecord(
@@ -83,7 +84,12 @@ class BaseMemory:
 
     def __init__(self, config: MemoryConfig, store: InMemoryStore) -> None:
         self.config = config
-        self.store = store
+        self._store = store
+
+    @property
+    def store(self) -> InMemoryStore:
+        """Backward-compatible accessor for the in-memory store."""
+        return self._store
 
     def add(
         self,
@@ -92,12 +98,12 @@ class BaseMemory:
         metadata: dict[str, Any],
     ) -> str:
         memory_id = str(uuid4())
-        return self.store.add(
+        return self._store.add(
             MemoryRecord(
                 id=memory_id,
                 content=content,
                 memory_type=self.memory_type,
                 importance=importance,
-                metadata=metadata,
+                metadata=copy.deepcopy(metadata),
             )
         )

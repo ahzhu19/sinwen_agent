@@ -19,6 +19,7 @@ class FakeMemoryManager:
         self.updated: list[dict[str, Any]] = []
         self.removed: list[tuple[str, str]] = []
         self.forgotten_count = 0
+        self.forget_dry_run_records: list[dict[str, Any]] = []
         self.consolidated_ids: list[str] = []
         self.cleared: dict[str, int] = {}
         self.stats_user_id = "u1"
@@ -101,8 +102,16 @@ class FakeMemoryManager:
         _ = session_id, limit_per_type
         return {"working": []}
 
-    def forget_memories(self, memory_type: str = "working", **kwargs: Any) -> int:
+    def forget_memories(
+        self,
+        memory_type: str = "working",
+        *,
+        dry_run: bool = False,
+        **kwargs: Any,
+    ) -> int | list[dict[str, Any]]:
         _ = memory_type, kwargs
+        if dry_run:
+            return list(self.forget_dry_run_records)
         return self.forgotten_count
 
     def consolidate_working_to_episodic(

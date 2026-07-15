@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
+
 import math
-import re
 import time
 from collections import Counter
 from typing import Any
 
 from .base import BaseMemory, MemoryRecord
+from ..tokenizer import tokenize as _tokenize_text
 
 
 class WorkingMemory(BaseMemory):
@@ -22,7 +24,7 @@ class WorkingMemory(BaseMemory):
     ) -> str:
         self.cleanup_expired()
         now = time.time()
-        enriched_metadata = dict(metadata)
+        enriched_metadata = copy.deepcopy(metadata)
         enriched_metadata.setdefault("created_at", now)
         enriched_metadata.setdefault("expires_at", now + self.config.working_memory_ttl_seconds)
         memory_id = super().add(content, importance, enriched_metadata)
@@ -33,13 +35,13 @@ class WorkingMemory(BaseMemory):
         self.cleanup_expired()
         records = [
             record
-            for record in self.store.list_records(memory_type=self.memory_type)
+            for record in self._store.list_records(memory_type=self.memory_type)
             if record.metadata.get("session_id") == session_id
         ]
         return sorted(records, key=lambda record: record.metadata.get("created_at", 0))
 
     def get(self, memory_id: str) -> MemoryRecord | None:
-        return self.store.get(memory_id)
+        return self._store.get(memory_id)
 
     def retrieve(
         self,
@@ -52,7 +54,7 @@ class WorkingMemory(BaseMemory):
         self.cleanup_expired()
         candidates = [
             record
-            for record in self.store.list_records(memory_type=self.memory_type)
+            for record in self._store.list_records(memory_type=self.memory_type)
             if session_id is None or record.metadata.get("session_id") == session_id
         ]
         vector_scores = self._try_tfidf_search(query, candidates)
@@ -76,12 +78,12 @@ class WorkingMemory(BaseMemory):
         return [record for _, record in scored_records[:limit]]
 
     def clear_session(self, session_id: str) -> None:
-        for record in self.store.list_records(memory_type=self.memory_type):
+        for record in self._store.list_records(memory_type=self.memory_type):
             if record.metadata.get("session_id") == session_id:
-                self.store.remove(record.id)
+                self._store.remove(record.id)
 
     def remove(self, memory_id: str) -> None:
-        self.store.remove(memory_id)
+        self._store.remove(memory_id)
 
     def update(
         self,
@@ -91,7 +93,7 @@ class WorkingMemory(BaseMemory):
         importance: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MemoryRecord | None:
-        return self.store.update(
+        return self._store.update(
             memory_id,
             content=content,
             importance=importance,
@@ -100,16 +102,16 @@ class WorkingMemory(BaseMemory):
 
     def cleanup_expired(self) -> None:
         now = time.time()
-        for record in self.store.list_records(memory_type=self.memory_type):
+        for record in self._store.list_records(memory_type=self.memory_type):
             if record.metadata.get("expires_at", now) <= now:
-                self.store.remove(record.id)
+                self._store.remove(record.id)
 
     def _enforce_capacity(self) -> None:
-        records = self.store.list_records(memory_type=self.memory_type)
+        records = self._store.list_records(memory_type=self.memory_type)
         records.sort(key=lambda record: (record.importance, record.metadata.get("created_at", 0)))
         overflow = len(records) - self.config.working_memory_capacity
         for record in records[:max(0, overflow)]:
-            self.store.remove(record.id)
+            self._store.remove(record.id)
 
     def _try_tfidf_search(
         self,
@@ -167,7 +169,7 @@ class WorkingMemory(BaseMemory):
         return max(0.1, 1.0 - (age_seconds / ttl))
 
     def _tokenize(self, text: str) -> list[str]:
-        return re.findall(r"[\w\u4e00-\u9fff]+", text.lower())
+        return _tokenize_text(text)
 
     def _character_bigrams(self, text: str) -> list[str]:
         compact = "".join(ch for ch in text if not ch.isspace())

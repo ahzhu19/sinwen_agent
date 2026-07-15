@@ -95,6 +95,9 @@ class RagStore(Protocol):
     def get_document(self, document_id: str) -> RagDocument:
         ...
 
+    def get_documents(self, document_ids: list[str]) -> list[RagDocument]:
+        ...
+
     def replace_chunks(self, document_id: str, chunks: list[RagChunk]) -> None:
         ...
 
@@ -111,6 +114,9 @@ class RagStore(Protocol):
         ...
 
     def list_documents(self, limit: int = 50) -> list[RagDocument]:
+        ...
+
+    def count_chunks(self) -> tuple[int, int]:
         ...
 
 
@@ -183,6 +189,13 @@ class InMemoryRagStore:
     def get_document(self, document_id: str) -> RagDocument:
         return self.documents[document_id]
 
+    def get_documents(self, document_ids: list[str]) -> list[RagDocument]:
+        return [
+            self.documents[doc_id]
+            for doc_id in document_ids
+            if doc_id in self.documents
+        ]
+
     def replace_chunks(self, document_id: str, chunks: list[RagChunk]) -> None:
         for chunk_id, chunk in list(self.chunks.items()):
             if chunk.document_id == document_id:
@@ -218,6 +231,11 @@ class InMemoryRagStore:
             reverse=True,
         )
         return documents[:limit]
+
+    def count_chunks(self) -> tuple[int, int]:
+        total = len(self.chunks)
+        indexed = sum(1 for chunk in self.chunks.values() if chunk.indexed)
+        return total, indexed
 
 
 class PostgresRagStore:
@@ -337,6 +355,22 @@ class PostgresRagStore:
             raise KeyError(document_id)
         return _row_to_document(row)
 
+    def get_documents(self, document_ids: list[str]) -> list[RagDocument]:
+        if not document_ids:
+            return []
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, source_uri, source_type, title, mime_type, content_hash,
+                       markdown, status, metadata, created_at, updated_at
+                FROM rag_documents
+                WHERE id = ANY(%s)
+                """,
+                (document_ids,),
+            ).fetchall()
+        return [_row_to_document(row) for row in rows]
+
     def replace_chunks(self, document_id: str, chunks: list[RagChunk]) -> None:
         self.ensure_schema()
         with psycopg.connect(self._database_url) as conn:
@@ -434,6 +468,21 @@ class PostgresRagStore:
                 (limit,),
             ).fetchall()
         return [_row_to_document(row) for row in rows]
+
+    def count_chunks(self) -> tuple[int, int]:
+        self.ensure_schema()
+        with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE indexed) AS indexed
+                FROM rag_chunks
+                """
+            ).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row["total"]), int(row["indexed"])
 
 
 def create_rag_store(database_url: str | None) -> PostgresRagStore:

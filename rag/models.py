@@ -66,3 +66,19 @@ class RagSearchResult:
 class RagAnswer:
     answer: str
     sources: list[RagSearchResult]
+
+@dataclass(frozen=True)
+class BatchIngestResult:
+    """Result of batch ingestion (directory)."""
+
+    documents: list[RagDocument]
+    errors: list[str]
+
+    @property
+    def success_count(self) -> int:
+        return len(self.documents)
+
+    @property
+    def error_count(self) -> int:
+        return len(self.errors)
+

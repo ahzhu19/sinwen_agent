@@ -14,6 +14,13 @@ from memory.protocols import MemoryServiceProtocol
 
 from prompts import DEFAULT_REACT_SYSTEM_PROMPT, REACT_USER_PROMPT_TEMPLATE, render_prompt
 
+from context import BuiltContext, ContextBuilder, ContextConfig
+
+from .context_runtime import (
+    build_context_messages,
+    disable_legacy_memory_retrieve,
+    resolve_session_id,
+)
 from .memory_runtime import (
     append_memory_context,
     build_memory_hook_config,
@@ -23,6 +30,8 @@ from .memory_runtime import (
 )
 
 if TYPE_CHECKING:
+    from tools.builtin.memory_tool import MemoryTool
+    from tools.builtin.rag_tool import RagTool
     from tools.registry import ToolRegistry
 
 
@@ -88,6 +97,9 @@ class ReActAgent(Agent):
         max_steps: int = 10,
         memory_service: MemoryServiceProtocol | None = None,
         memory_hooks: MemoryHookConfig | None = None,
+        context_builder: ContextBuilder | None = None,
+        context_config: ContextConfig | None = None,
+        enable_context: bool = True,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.tool_registry = tool_registry
@@ -96,6 +108,25 @@ class ReActAgent(Agent):
         self.react_trace: list[str] = []
         self.memory_service = memory_service
         self.memory_hooks = memory_hooks
+        self.context_config = context_config or ContextConfig()
+        self.enable_context = enable_context
+        self._last_built_context: BuiltContext | None = None
+        self._context_memory_tool: MemoryTool | None = None
+
+        if context_builder is not None:
+            self.context_builder = context_builder
+        elif enable_context:
+            self.context_builder = ContextBuilder(config=self.context_config)
+        else:
+            self.context_builder = None
+
+        if self.context_builder is not None and enable_context:
+            disable_legacy_memory_retrieve(self.memory_hooks)
+
+    @property
+    def last_built_context(self) -> BuiltContext | None:
+        """最近一次 run 构建的上下文，便于调试与评估。"""
+        return self._last_built_context
 
     @classmethod
     def with_agent_tools(
@@ -116,10 +147,14 @@ class ReActAgent(Agent):
         memory_user_id: str = "default_user",
         memory_hook_session_id: str | None = None,
         memory_service: MemoryServiceProtocol | None = None,
+        context_config: ContextConfig | None = None,
+        enable_context: bool = True,
     ) -> "ReActAgent":
         """使用默认工具集（含可选 memory / rag）创建 ReActAgent。"""
         from memory.service import MemoryService
         from tools.agent_registry import create_agent_tool_registry
+        from tools.builtin.memory_tool import MemoryTool
+        from tools.builtin.rag_tool import RagTool
 
         hooks_enabled = resolve_memory_hooks_enabled(enable_memory, enable_memory_hooks)
         service = memory_service
@@ -137,7 +172,28 @@ class ReActAgent(Agent):
             memory_user_id=memory_user_id,
             memory_service=service,
         )
-        return cls(
+
+        memory_tool = registry.get_tool("memory")
+        if not isinstance(memory_tool, MemoryTool) and service is not None and enable_context:
+            memory_tool = MemoryTool(
+                user_id=memory_user_id,
+                session_id=memory_hook_session_id,
+                memory_types=memory_types or ["working"],
+                memory_service=service,
+            )
+
+        rag_tool = registry.get_tool("rag")
+        rag_tool = rag_tool if isinstance(rag_tool, RagTool) else None
+
+        context_builder = None
+        if enable_context:
+            context_builder = ContextBuilder(
+                memory_tool=memory_tool if isinstance(memory_tool, MemoryTool) else None,
+                rag_tool=rag_tool,
+                config=context_config or ContextConfig(),
+            )
+
+        agent = cls(
             name=name,
             llm=llm,
             tool_registry=registry,
@@ -147,16 +203,24 @@ class ReActAgent(Agent):
             max_steps=max_steps,
             memory_service=service,
             memory_hooks=hooks,
+            context_builder=context_builder,
+            context_config=context_config,
+            enable_context=enable_context,
         )
+        agent._context_memory_tool = (
+            memory_tool if isinstance(memory_tool, MemoryTool) else None
+        )
+        return agent
 
     def run(self, input_text: str, **kwargs: Any) -> str:
         """运行文本 ReAct 循环，返回最终答案。"""
         self.react_trace = []
+        self._last_built_context = None
         temperature = kwargs.pop("temperature", self.config.temperature)
-        memory_context = resolve_memory_context(
-            self.memory_service,
-            self.memory_hooks,
-            input_text,
+        memory_context = (
+            None
+            if self.enable_context and self.context_builder is not None
+            else resolve_memory_context(self.memory_service, self.memory_hooks, input_text)
         )
 
         print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
@@ -214,6 +278,25 @@ class ReActAgent(Agent):
             question=input_text,
             history=history,
         )
+
+        if self.enable_context and self.context_builder is not None:
+            # ContextBuilder 负责 Gather（记忆 + RAG + 历史对话）→ Select → Structure
+            # 每轮 run 只构建一次，后续步骤复用 system 消息，仅 user prompt 随 react_trace 更新
+            if self._last_built_context is None:
+                self._last_built_context = build_context_messages(
+                    self.context_builder,
+                    input_text=input_text,
+                    system_prompt=self.system_prompt,
+                    conversation_history=self.get_history(),
+                    session_id=resolve_session_id(
+                        self.memory_hooks,
+                        self._context_memory_tool,
+                    ),
+                )
+            messages: list[dict[str, str]] = list(self._last_built_context.messages)
+            messages.append({"role": "user", "content": user_prompt})
+            return messages
+
         messages: list[dict[str, str]] = []
         system_content = append_memory_context(self.system_prompt, memory_context)
         if system_content:

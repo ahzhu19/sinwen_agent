@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from rag.manager import RagManager
-from rag.models import RagAnswer, RagDocument, RagSearchResult
+from rag.models import BatchIngestResult, RagAnswer, RagDocument, RagSearchResult
 from tools.base import Tool
 
 SUPPORTED_RAG_ACTIONS = (
@@ -33,6 +33,7 @@ class RagManagerProtocol(Protocol):
         query: str,
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | bool | None = None,
     ) -> list[RagSearchResult]:
         ...
 
@@ -41,6 +42,7 @@ class RagManagerProtocol(Protocol):
         query: str,
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | bool | None = None,
     ) -> RagAnswer:
         ...
 
@@ -54,6 +56,21 @@ class RagManagerProtocol(Protocol):
         ...
 
     def stats(self) -> dict[str, Any]:
+        ...
+
+    def ingest_url(
+        self,
+        url: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> RagDocument:
+        ...
+
+    def ingest_directory(
+        self,
+        path: str,
+        pattern: str = "**/*.md",
+        metadata: dict[str, Any] | None = None,
+    ) -> BatchIngestResult:
         ...
 
 
@@ -87,8 +104,12 @@ class RagTool(Tool):
                 },
                 "source_type": {
                     "type": "string",
-                    "enum": ["file"],
-                    "description": "知识源类型，第一版支持 file",
+                    "enum": ["file", "url", "directory"],
+                    "description": "知识源类型：file（本地文件）、url（网页 URL）、directory（目录批量）",
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "目录摄取时的文件匹配模式（source_type=directory 时使用），默认 **/*.md",
                 },
                 "query": {
                     "type": "string",
@@ -102,6 +123,11 @@ class RagTool(Tool):
                     "type": "string",
                     "enum": ["direct", "hyde", "multi_query"],
                     "description": "检索策略：direct / hyde / multi_query",
+                },
+                "rerank": {
+                    "type": "string",
+                    "enum": ["none", "llm"],
+                    "description": "重排序：none（默认）或 llm（LLM 打分重排序，延迟更高）",
                 },
                 "document_id": {
                     "type": "string",
@@ -140,15 +166,44 @@ class RagTool(Tool):
         self,
         source: str = "",
         source_type: str = "file",
+        pattern: str = "**/*.md",
         **metadata: Any,
     ) -> str:
         try:
             if not source.strip():
                 return "❌ 摄取失败: source 不能为空"
+            meta = dict(metadata)
+            if source_type == "directory":
+                result = self.rag_manager.ingest_directory(
+                    source,
+                    pattern=pattern,
+                    metadata=meta,
+                )
+                lines = [
+                    f"✅ 目录摄取完成: 成功 {result.success_count} 篇, "
+                    f"失败 {result.error_count} 篇"
+                ]
+                if result.errors:
+                    lines.append("失败文件：")
+                    lines.extend(f"  - {err}" for err in result.errors)
+                if result.documents:
+                    lines.append("已摄取文档：")
+                    for doc in result.documents:
+                        lines.append(
+                            f"  - [{doc.id[:8]}...] "
+                            f"{doc.title or doc.source_uri}"
+                        )
+                return "\n".join(lines)
+            if source_type == "url":
+                document = self.rag_manager.ingest_url(source, metadata=meta)
+                return (
+                    f"✅ RAG 文档已摄取 (ID: {document.id[:8]}..., "
+                    f"标题: {document.title or document.source_uri})"
+                )
             document = self.rag_manager.ingest(
                 source=source,
                 source_type=source_type,
-                metadata=dict(metadata),
+                metadata=meta,
             )
             return (
                 f"✅ RAG 文档已摄取 (ID: {document.id[:8]}..., "
@@ -162,6 +217,7 @@ class RagTool(Tool):
         query: str = "",
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | None = None,
         **kwargs: Any,
     ) -> str:
         _ = kwargs
@@ -172,6 +228,7 @@ class RagTool(Tool):
                 query=query,
                 top_k=top_k,
                 strategy=strategy,
+                rerank=rerank,
             )
             if not results:
                 return f"未找到与「{query}」相关的知识片段"
@@ -192,6 +249,7 @@ class RagTool(Tool):
         query: str = "",
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | None = None,
         **kwargs: Any,
     ) -> str:
         _ = kwargs
@@ -202,6 +260,7 @@ class RagTool(Tool):
                 query=query,
                 top_k=top_k,
                 strategy=strategy,
+                rerank=rerank,
             )
             lines = [answer.answer]
             if answer.sources:

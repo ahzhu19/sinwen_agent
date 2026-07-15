@@ -24,6 +24,9 @@ class ToolRegistry:
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())
 
+    def get_tool(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
     def describe_tools(self) -> str:
         """返回适合放进 ReAct 提示词的工具说明。"""
         if not self._tools:

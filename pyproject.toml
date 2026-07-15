@@ -14,6 +14,7 @@ dependencies = [
     "pymilvus>=2.5.0",
     "neo4j>=6.2.0",
     "markitdown>=0.1.6",
+    "jieba>=0.42",
 ]
 
 [dependency-groups]

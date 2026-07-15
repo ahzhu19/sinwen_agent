@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import time
 from typing import Any
 
@@ -14,6 +16,7 @@ from ..storage.vector_outbox import (
     upsert_vector_with_outbox,
 )
 from ..vector_outbox_processor import VectorOutboxProcessor
+from ..orphan_detection import detect_orphan_vectors
 from .base import MemoryRecord
 
 
@@ -60,7 +63,7 @@ class EpisodicMemory:
                 user_id=self.user_id,
                 content=content,
                 importance=importance,
-                metadata=dict(metadata),
+                metadata=copy.deepcopy(metadata),
                 session_id=session_id,
                 vector=vector,
                 collection_name=self._vectors.collection_name,
@@ -73,7 +76,7 @@ class EpisodicMemory:
             user_id=self.user_id,
             content=content,
             importance=importance,
-            metadata=dict(metadata),
+            metadata=copy.deepcopy(metadata),
             session_id=session_id,
         )
         queued = upsert_vector_with_outbox(
@@ -116,7 +119,7 @@ class EpisodicMemory:
                 user_id=self.user_id,
                 content=content,
                 importance=importance,
-                metadata=dict(metadata),
+                metadata=copy.deepcopy(metadata),
                 session_id=session_id,
                 vector=vector,
                 collection_name=self._vectors.collection_name,
@@ -130,7 +133,7 @@ class EpisodicMemory:
             user_id=self.user_id,
             content=content,
             importance=importance,
-            metadata=dict(metadata),
+            metadata=copy.deepcopy(metadata),
             session_id=session_id,
         )
         queued = upsert_vector_with_outbox(
@@ -194,7 +197,9 @@ class EpisodicMemory:
         if not hits:
             return []
 
-        events = self._store.get_many([hit.memory_id for hit in hits])
+        hit_ids = [hit.memory_id for hit in hits]
+        events = self._store.get_many(hit_ids)
+        detect_orphan_vectors(hit_ids, [e.id for e in events], memory_kind="episodic")
         score_by_id = {hit.memory_id: hit.score for hit in hits}
 
         scored: list[tuple[float, MemoryRecord]] = []

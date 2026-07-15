@@ -47,6 +47,8 @@ class RagIngestionService:
         source: str,
         source_type: str = "file",
         metadata: dict[str, Any] | None = None,
+        *,
+        source_uri: str | None = None,
     ) -> RagDocument:
         metadata = dict(metadata or {})
         run = self._store.start_ingestion({"source": source, "source_type": source_type})
@@ -54,7 +56,7 @@ class RagIngestionService:
             converted = self._converter.convert(source)
             content_hash = hashlib.sha256(converted.markdown.encode()).hexdigest()
             document = self._store.create_document(
-                source_uri=source,
+                source_uri=source_uri or source,
                 source_type=source_type,
                 title=converted.title,
                 mime_type=converted.mime_type,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..graph_relevance import build_ranks, reciprocal_rank_fusion
+from ..orphan_detection import detect_orphan_vectors
 from ..records import semantic_fact_to_record
 from .base import MemoryRecord
 
@@ -68,6 +69,7 @@ def retrieve_with_rrf(
         return []
 
     facts = store.get_many(candidate_ids)
+    detect_orphan_vectors(candidate_ids, [f.id for f in facts], memory_kind="semantic")
     vector_ranks = build_ranks(vector_scores) if vector_scores else {}
     graph_ranks = build_ranks(graph_scores) if graph_scores else {}
     rrf_scores = reciprocal_rank_fusion(

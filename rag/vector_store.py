@@ -7,6 +7,8 @@ from typing import Protocol
 
 from pymilvus import MilvusClient
 
+from memory.milvus_guard import validate_collection_dimension
+
 from .models import RagChunk, RagDocument
 
 
@@ -53,6 +55,7 @@ class MilvusRagVectorStore:
         if self._collection_ready:
             return
         client = self._get_client()
+        validate_collection_dimension(client, self._collection_name, vector_size)
         if not client.has_collection(self._collection_name):
             client.create_collection(
                 collection_name=self._collection_name,

@@ -86,7 +86,8 @@ class MemoryManagerProtocol(Protocol):
         importance_threshold: float | None = None,
         older_than_days: int | None = None,
         limit: int | None = None,
-    ) -> int:
+        dry_run: bool = False,
+    ) -> int | list["MemoryRecord"]:
         ...
 
     def consolidate_working_to_episodic(
@@ -148,7 +149,8 @@ class MemoryServiceProtocol(Protocol):
         importance_threshold: float | None = None,
         older_than_days: int | None = None,
         limit: int | None = None,
-    ) -> int:
+        dry_run: bool = False,
+    ) -> int | list["MemoryRecord"]:
         ...
 
     def consolidate(

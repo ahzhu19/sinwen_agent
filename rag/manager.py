@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import os
+import tempfile
+import urllib.request
+from pathlib import Path
+from urllib.parse import urlparse
+
 from core.llm import BaseLLM
 from memory.config import MemoryConfig
 from memory.embedding import create_embedding_provider
@@ -13,7 +19,7 @@ from .config import RagConfig
 from .converter import DocumentConverter, MarkItDownConverter
 from .generator import RagGenerator
 from .ingestion import RagIngestionService
-from .models import INGESTION_INDEXED, RagAnswer, RagDocument, RagSearchResult
+from .models import INGESTION_INDEXED, BatchIngestResult, RagAnswer, RagDocument, RagSearchResult
 from .retriever import RagRetriever
 from .outbox_store import create_rag_outbox_store
 from .storage import RagStore, create_rag_store
@@ -41,7 +47,7 @@ class RagManager:
         )
         self.vector_store = vector_store or MilvusRagVectorStore(
             uri=self.config.milvus_uri,
-            collection_name=self.config.collection_name,
+            collection_name=self.config.rag_milvus_collection(),
             metric_type=self.config.metric_type,
             timeout=self.config.timeout,
         )
@@ -63,7 +69,7 @@ class RagManager:
             vector_store=self.vector_store,
             embedding_provider=self.embedding_provider,
             vector_outbox=self._vector_outbox,
-            collection_name=self.config.collection_name,
+            collection_name=self.config.rag_milvus_collection(),
             enable_vector_outbox=self.config.enable_rag_vector_outbox,
             vector_outbox_max_attempts=self.config.rag_vector_outbox_max_attempts,
         )
@@ -81,25 +87,84 @@ class RagManager:
         source: str,
         source_type: str = "file",
         metadata: dict[str, Any] | None = None,
+        *,
+        source_uri: str | None = None,
     ) -> RagDocument:
         service = self._ingestion_service()
-        return service.ingest(source=source, source_type=source_type, metadata=metadata)
+        return service.ingest(
+            source=source,
+            source_type=source_type,
+            metadata=metadata,
+            source_uri=source_uri,
+        )
+
+    def ingest_url(
+        self,
+        url: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> RagDocument:
+        """Download content from URL and ingest it."""
+        with urllib.request.urlopen(url, timeout=self.config.timeout) as response:
+            raw = response.read()
+        suffix = _url_suffix(url)
+        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            return self.ingest(
+                source=tmp_path,
+                source_type="url",
+                metadata=metadata,
+                source_uri=url,
+            )
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def ingest_directory(
+        self,
+        path: str,
+        pattern: str = "**/*.md",
+        metadata: dict[str, Any] | None = None,
+    ) -> BatchIngestResult:
+        """Ingest all files matching a glob pattern from a directory."""
+        directory = Path(path)
+        if not directory.is_dir():
+            raise NotADirectoryError(f"不是有效目录: {path}")
+        documents: list[RagDocument] = []
+        errors: list[str] = []
+        for file_path in sorted(directory.glob(pattern)):
+            if not file_path.is_file():
+                continue
+            try:
+                doc = self.ingest(
+                    source=str(file_path),
+                    source_type="file",
+                    metadata=metadata,
+                )
+                documents.append(doc)
+            except Exception as exc:
+                errors.append(f"{file_path}: {exc}")
+        return BatchIngestResult(documents=documents, errors=errors)
 
     def search(
         self,
         query: str,
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | bool | None = None,
     ) -> list[RagSearchResult]:
-        return self._retriever().search(query=query, top_k=top_k, strategy=strategy)
+        return self._retriever().search(
+            query=query, top_k=top_k, strategy=strategy, rerank=rerank
+        )
 
     def answer(
         self,
         query: str,
         top_k: int = 5,
         strategy: str = "direct",
+        rerank: str | bool | None = None,
     ) -> RagAnswer:
-        sources = self.search(query=query, top_k=top_k, strategy=strategy)
+        sources = self.search(query=query, top_k=top_k, strategy=strategy, rerank=rerank)
         return RagGenerator(self.llm).answer(query=query, sources=sources)
 
     def list_documents(self, limit: int = 50) -> list[RagDocument]:
@@ -125,16 +190,19 @@ class RagManager:
         return self.store.get_document(document_id)
 
     def stats(self) -> dict[str, Any]:
-        documents = self.store.list_documents(limit=10_000)
-        chunk_count = 0
-        indexed_count = 0
-        for document in documents:
-            chunks = self.store.get_chunks_for_document(document.id)
-            chunk_count += len(chunks)
-            indexed_count += sum(1 for chunk in chunks if chunk.indexed)
+        document_count = len(self.store.list_documents(limit=10_000))
+        chunk_count, indexed_count = self.store.count_chunks()
         return {
-            "document_count": len(documents),
+            "document_count": document_count,
             "chunk_count": chunk_count,
             "indexed_chunk_count": indexed_count,
-            "collection": self.config.collection_name,
+            "collection": self.config.rag_milvus_collection(),
         }
+
+
+def _url_suffix(url: str) -> str:
+    """Extract file suffix from URL path, defaulting to .html."""
+    path = urlparse(url).path
+    suffix = Path(path).suffix
+    return suffix if suffix else ".html"
+

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from memory.collection_names import resolve_collection_name
+
 
 @dataclass(frozen=True)
 class RagConfig:
@@ -22,6 +24,17 @@ class RagConfig:
     enable_rag_vector_outbox: bool = True
     rag_vector_outbox_max_attempts: int = 5
     rag_vector_outbox_processing_timeout_seconds: int = 900
+    use_versioned_milvus_collections: bool = True
+    embed_model_name: str = "text-embedding-v3"
+
+    def rag_milvus_collection(self) -> str:
+        """Resolve RAG Milvus collection name with optional versioning."""
+        return resolve_collection_name(
+            self.collection_name,
+            embed_model=self.embed_model_name,
+            vector_size=self.vector_size,
+            use_versioned=self.use_versioned_milvus_collections,
+        )
 
     @classmethod
     def from_env(cls) -> RagConfig:
@@ -49,6 +62,11 @@ class RagConfig:
             overlap_tokens=int(os.getenv("RAG_OVERLAP_TOKENS", "80")),
             enable_rag_vector_outbox=os.getenv("ENABLE_RAG_VECTOR_OUTBOX", "true").lower()
             in {"1", "true", "yes"},
+            use_versioned_milvus_collections=os.getenv(
+                "USE_VERSIONED_MILVUS_COLLECTIONS", "true"
+            ).lower()
+            in {"1", "true", "yes"},
+            embed_model_name=os.getenv("EMBED_MODEL_NAME", "text-embedding-v3").strip('"'),
             rag_vector_outbox_max_attempts=int(os.getenv("RAG_VECTOR_OUTBOX_MAX_ATTEMPTS", "5")),
             rag_vector_outbox_processing_timeout_seconds=int(
                 os.getenv("RAG_VECTOR_OUTBOX_PROCESSING_TIMEOUT_SECONDS", "900")

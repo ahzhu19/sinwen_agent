@@ -8,6 +8,7 @@ from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
+from memory.protocols import MemoryServiceProtocol
 
 from .tool_loop import invoke_with_tool_registry
 from prompts import (
@@ -70,6 +71,8 @@ class PlanAndSolveAgent(Agent):
         tool_registry: Optional["ToolRegistry"] = None,
         enable_tool_calling: bool = True,
         max_tool_iterations: int = 3,
+        memory_service: MemoryServiceProtocol | None = None,
+        enable_memory: bool = False,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.planner_prompt = planner_prompt
@@ -79,6 +82,8 @@ class PlanAndSolveAgent(Agent):
         self.tool_registry = tool_registry
         self.enable_tool_calling = enable_tool_calling and tool_registry is not None
         self.max_tool_iterations = max_tool_iterations
+        self.memory_service = memory_service
+        self.enable_memory = enable_memory and memory_service is not None
 
     @classmethod
     def with_agent_tools(
@@ -95,10 +100,17 @@ class PlanAndSolveAgent(Agent):
         max_plan_retries: int = 3,
         max_tool_iterations: int = 3,
         memory_types: list[str] | None = None,
+        memory_user_id: str = "default_user",
+        memory_service: MemoryServiceProtocol | None = None,
         verbose: bool = False,
     ) -> "PlanAndSolveAgent":
         """使用默认工具集（含可选 memory / rag）创建 PlanAndSolveAgent。"""
+        from memory.service import MemoryService
         from tools.agent_registry import create_agent_tool_registry
+
+        service = memory_service
+        if service is None and enable_memory:
+            service = MemoryService(user_id=memory_user_id, memory_types=memory_types)
 
         registry = create_agent_tool_registry(
             enable_search=enable_search,
@@ -106,6 +118,8 @@ class PlanAndSolveAgent(Agent):
             enable_memory=enable_memory,
             enable_rag=enable_rag,
             memory_types=memory_types,
+            memory_user_id=memory_user_id,
+            memory_service=service,
         )
         return cls(
             name=name,
@@ -116,6 +130,8 @@ class PlanAndSolveAgent(Agent):
             verbose=verbose,
             tool_registry=registry,
             max_tool_iterations=max_tool_iterations,
+            memory_service=service,
+            enable_memory=enable_memory,
         )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
@@ -123,8 +139,9 @@ class PlanAndSolveAgent(Agent):
         temperature = kwargs.pop("temperature", self.config.temperature)
 
         print(f"\n📋 {self.name} 开始处理问题: {input_text}")
+        episodic_context = self._retrieve_past_plans(input_text)
         try:
-            plan = self._make_plan(input_text, temperature, **kwargs)
+            plan = self._make_plan(input_text, temperature, episodic_context=episodic_context, **kwargs)
         except PlanParseError:
             self._save_final_answer(input_text, PLAN_PARSE_ERROR_MESSAGE)
             print(f"❌ {self.name} 无法制定有效计划")
@@ -151,16 +168,26 @@ class PlanAndSolveAgent(Agent):
         )
         self._log_llm_response("汇总", final_answer)
         self._save_final_answer(input_text, final_answer)
+        self._maybe_record_plan(input_text, plan, final_answer)
         print(f"✅ {self.name} Plan-and-Solve 完成")
         return final_answer
 
     def _make_plan(
-        self, question: str, temperature: float, **kwargs: Any
+        self,
+        question: str,
+        temperature: float,
+        *,
+        episodic_context: str | None = None,
+        **kwargs: Any,
     ) -> list[str]:
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self.planner_prompt},
             {"role": "user", "content": question},
         ]
+        if episodic_context:
+            messages.append(
+                {"role": "system", "content": f"历史相似计划参考:\n{episodic_context}"}
+            )
         attempts = self.max_plan_retries + 1
         for attempt in range(1, attempts + 1):
             raw = self.llm.invoke(messages, temperature=temperature, **kwargs)
@@ -221,6 +248,56 @@ class PlanAndSolveAgent(Agent):
         )
         messages = [{"role": "user", "content": prompt}]
         return self.llm.invoke(messages, temperature=temperature, **kwargs) or ""
+
+    def _retrieve_past_plans(self, question: str) -> str | None:
+        """从 episodic 记忆检索相似历史计划（可选）。"""
+        if not self.enable_memory or self.memory_service is None:
+            return None
+        try:
+            results = self.memory_service.search(
+                question,
+                memory_type="episodic",
+                limit=3,
+            )
+        except Exception as exc:
+            print(f"⚠️ 历史计划检索失败: {exc}")
+            return None
+        if not results:
+            return None
+        lines: list[str] = []
+        for result in results:
+            content = result.get("content", "") if isinstance(result, dict) else str(result)
+            lines.append(f"- {content}")
+        return "\n".join(lines) if lines else None
+
+    def _maybe_record_plan(
+        self,
+        question: str,
+        plan: list[str],
+        final_answer: str,
+    ) -> None:
+        """将完成的计划存入 episodic 记忆（可选）。"""
+        if not self.enable_memory or self.memory_service is None:
+            return
+        content_text = (
+            f"问题: {question}\n"
+            f"计划: {plan}\n"
+            f"最终答案: {final_answer}"
+        )
+        try:
+            self.memory_service.add(
+                content=content_text,
+                memory_type="episodic",
+                importance=0.6,
+                metadata={
+                    "agent_type": "plan_and_solve",
+                    "question": question,
+                    "plan_steps": len(plan),
+                    "source": "plan_solve_hook",
+                },
+            )
+        except Exception as exc:
+            print(f"⚠️ 计划记忆写入失败: {exc}")
 
     @staticmethod
     def _format_history(step_results: list[tuple[str, str]]) -> str:

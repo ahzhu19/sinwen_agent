@@ -88,7 +88,8 @@ class MemoryService:
         importance_threshold: float | None = None,
         older_than_days: int | None = None,
         limit: int | None = None,
-    ) -> int:
+        dry_run: bool = False,
+    ) -> int | list[Any]:
         return self._manager.forget_memories(
             memory_type,
             strategy=strategy,
@@ -96,6 +97,7 @@ class MemoryService:
             importance_threshold=importance_threshold,
             older_than_days=older_than_days,
             limit=limit,
+            dry_run=dry_run,
         )
 
     def consolidate(

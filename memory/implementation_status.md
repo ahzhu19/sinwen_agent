@@ -18,7 +18,7 @@
 - 概念抽取依赖 LLM（`metadata.concepts` 可覆盖）。
 - 图扩展为启发式 hop1/hop2，RELATES_TO 权重可配置，写入时 weight 仍固定 1.0。
 - Semantic / Episodic 向量索引为异步最终一致，需常驻 worker。
-- `forget` 无 dry-run；semantic 批量删除需保守 threshold。
+- `forget` 支持 `dry_run=True` 预览（返回 `list[MemoryRecord]` 不删除）；semantic 批量删除需保守 threshold。
 - Perceptual 非真实多模态向量空间。
 - `MemoryTool` 默认仅 `working`，episodic/semantic 需显式 `memory_types`。
 

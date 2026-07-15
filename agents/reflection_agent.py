@@ -6,6 +6,7 @@ from core.agent import Agent
 from core.config import Config
 from core.llm import BaseLLM
 from core.message import Message
+from memory.protocols import MemoryServiceProtocol
 
 from .tool_loop import invoke_with_tool_registry
 from prompts import (
@@ -38,6 +39,8 @@ class ReflectionAgent(Agent):
         tool_registry: Optional["ToolRegistry"] = None,
         enable_tool_calling: bool = True,
         max_tool_iterations: int = 3,
+        memory_service: MemoryServiceProtocol | None = None,
+        enable_memory: bool = False,
     ):
         super().__init__(name, llm, system_prompt, config)
         self.max_iterations = max_iterations
@@ -46,6 +49,8 @@ class ReflectionAgent(Agent):
         self.tool_registry = tool_registry
         self.enable_tool_calling = enable_tool_calling and tool_registry is not None
         self.max_tool_iterations = max_tool_iterations
+        self.memory_service = memory_service
+        self.enable_memory = enable_memory and memory_service is not None
 
     @classmethod
     def with_agent_tools(
@@ -62,10 +67,17 @@ class ReflectionAgent(Agent):
         max_iterations: int = 3,
         max_tool_iterations: int = 3,
         memory_types: list[str] | None = None,
+        memory_user_id: str = "default_user",
+        memory_service: MemoryServiceProtocol | None = None,
         verbose: bool = False,
     ) -> "ReflectionAgent":
         """使用默认工具集（含可选 memory / rag）创建 ReflectionAgent。"""
+        from memory.service import MemoryService
         from tools.agent_registry import create_agent_tool_registry
+
+        service = memory_service
+        if service is None and enable_memory:
+            service = MemoryService(user_id=memory_user_id, memory_types=memory_types)
 
         registry = create_agent_tool_registry(
             enable_search=enable_search,
@@ -73,6 +85,8 @@ class ReflectionAgent(Agent):
             enable_memory=enable_memory,
             enable_rag=enable_rag,
             memory_types=memory_types,
+            memory_user_id=memory_user_id,
+            memory_service=service,
         )
         return cls(
             name=name,
@@ -83,6 +97,8 @@ class ReflectionAgent(Agent):
             verbose=verbose,
             tool_registry=registry,
             max_tool_iterations=max_tool_iterations,
+            memory_service=service,
+            enable_memory=enable_memory,
         )
 
     def run(self, input_text: str, **kwargs: Any) -> str:
@@ -110,6 +126,7 @@ class ReflectionAgent(Agent):
             self.reflection_trace.append(f"Revised: {answer}")
 
         self._save_final_answer(input_text, answer)
+        self._maybe_record_reflection(input_text, answer)
         print(f"✅ {self.name} 反思完成")
         return answer
 
@@ -171,6 +188,39 @@ class ReflectionAgent(Agent):
         print(f"{'─' * 60}")
         print(content if content else "(空)")
         print(f"{'─' * 60}")
+
+    def _maybe_record_reflection(self, question: str, final_answer: str) -> None:
+        """反思结束后将洞察写入 semantic 记忆（可选）。"""
+        if not self.enable_memory or self.memory_service is None:
+            return
+        if len(self.reflection_trace) < 2:
+            return
+        critiques = [
+            entry.replace("Critique: ", "", 1)
+            for entry in self.reflection_trace
+            if entry.startswith("Critique: ")
+        ]
+        if not critiques:
+            return
+        content_text = (
+            f"问题: {question}\n"
+            f"批评: {critiques[-1]}\n"
+            f"最终答案: {final_answer}"
+        )
+        try:
+            self.memory_service.add(
+                content=content_text,
+                memory_type="semantic",
+                importance=0.7,
+                metadata={
+                    "agent_type": "reflection",
+                    "question": question,
+                    "reflection_rounds": len(critiques),
+                    "source": "reflection_hook",
+                },
+            )
+        except Exception as exc:
+            print(f"⚠️ 反思记忆写入失败: {exc}")
 
     def _save_final_answer(self, input_text: str, final_answer: str) -> None:
         self.add_message(Message(content=input_text, role="user"))

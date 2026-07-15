@@ -12,7 +12,7 @@
 1. 按 **状态** 筛选：`open` / `mitigated` / `accepted` / `done`。
 2. 按 **优先级** 排序：P0 > P1 > P2 > P3。
 
-**测试基线**：`uv run pytest tests/ -q` → 178 passed, 3 skipped。
+**测试基线**：`uv run pytest tests/ -q` → 276 passed, 3 skipped。
 
 ---
 
@@ -39,11 +39,11 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `mitigated`（Phase 2 已实现） |
+| **状态** | `done` |
 | **优先级** | P1 |
 | **问题** | 语义记忆主存是 Neo4j，Milvus 向量索引仍是异步最终一致。 |
 | **当前行为** | Neo4j 同事务写 `SemanticMemory` + `SemanticOutboxEvent`；Worker 按 `version` 同步 Milvus；读路径补 `embedding_status=pending`。Worker 启动时 `reclaim_stale_processing_outbox`；`ensure_pending_outbox_events` 为缺 outbox 的记忆补 pending 事件。 |
-| **目标方案** | ~~Phase 2 增加 Neo4j ↔ Milvus 对账、processing 超时回收~~（已实现）；换 embedding 模型后的重建策略仍待做。 |
+| **目标方案** | ~~Phase 2 增加 Neo4j ↔ Milvus 对账、processing 超时回收~~（已实现）；换 embedding 模型后的重建策略已实现：`scripts/memory_reindex.py` 覆盖 episodic / semantic / RAG 三类，支持 `--dry-run` / `--rag-only` / `--episodic-only` / `--semantic-only`。 |
 | **相关代码** | `memory/modules/semantic.py`、`memory/storage/neo4j_store.py`、`memory/semantic_outbox_processor.py` |
 | **可讨论的问题** | 对账频率如何定？是否需要 UI/CLI 展示「索引中」？ |
 
@@ -127,10 +127,11 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `mitigated` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **当前行为** | `SEMANTIC_GRAPH_RELATION_WEIGHTS` 配置 RELATES_TO / CO_OCCURRENCE；写入时 RELATES_TO.weight 仍固定 1.0。 |
-| **剩余** | 写入时动态更新关系 weight（PMI 等）。 |
+| **当前行为** | `SEMANTIC_GRAPH_RELATION_WEIGHTS` 配置 RELATES_TO / CO_OCCURRENCE；写入时 `RELATES_TO` 关系动态递增 `co_occurrence_count`，读取时 `compute_graph_relevance` 用 PMI-inspired log boost 调整 hop2 分数。 |
+| **解决方案** | Neo4j Cypher `MERGE ... ON CREATE SET co_occurrence_count=1, weight=1.0, ON MATCH SET co_occurrence_count = co_occurrence_count + 1`；hop2 查询增加 `avg(co_occurrence_count)`，分数计算用 `pmi_boost = min(2.0, 1.0 + log(co_occurrence) / 2)`。 |
+| **剩余** | 真机 Neo4j 验证 PMI 数值合理性。 |
 
 ---
 
@@ -138,10 +139,12 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open`（R-01 已缓解 Working） |
+| **状态** | `done`（Working 已接入 jieba） |
 | **优先级** | P3 |
-| **问题** | 无 jieba 等分词；语义侧依赖 LLM 概念而非关键词。 |
-| **可讨论的问题** | 是否引入 jieba？Working 是否要上 embedding？ |
+| **当前行为** | `memory/tokenizer.py` 提供 `tokenize()` 函数，优先使用 jieba 做中文词级别分词，不可用时降级为正则。WorkingMemory.`_tokenize` 已替换为调用此函数。TF-IDF 和关键词匹配从逐字切分升级为词级别（如"机器学习"→\["机器", "学习"\]）。 |
+| **相关代码** | `memory/tokenizer.py`、`memory/modules/working.py` |
+| **测试** | `tests/test_chinese_tokenizer.py`（6 测试） |
+| **剩余** | Semantic 侧仍依赖 LLM 概念抽取，非关键词分词。 |
 
 ---
 
@@ -151,10 +154,10 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `done`（基础版） |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **当前行为** | 四类记忆支持 `forget`；策略 `importance` / `importance_ttl` / `session`；semantic 默认单次上限 50 条。 |
-| **剩余** | dry-run 预览、更保守的 semantic 删除确认。 |
+| **当前行为** | 四类记忆支持 `forget`；策略 `importance` / `importance_ttl` / `session`；semantic 默认单次上限 50 条。`dry_run=True` 返回预览列表（`list[MemoryRecord]`）不执行删除，Manager / Service / Tool 三层透传。 |
+| **剩余** | 更保守的 semantic 删除确认。 |
 
 ---
 
@@ -174,10 +177,11 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `mitigated` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **当前行为** | `USE_VERSIONED_MILVUS_COLLECTIONS` 版本化 collection；Milvus 维度 guard；`scripts/memory_reindex.py`；episodic `embedding_model` 列。 |
-| **剩余** | RAG/perceptual collection 版本化、reindex 真机 runbook。 |
+| **当前行为** | `USE_VERSIONED_MILVUS_COLLECTIONS` 版本化 collection；Milvus 维度 guard；`scripts/memory_reindex.py`；episodic `embedding_model` 列。episodic / semantic / perceptual 均已接入 `resolve_collection_name`。 |
+| **解决方案** | RAG 侧补齐版本化：`RagConfig` 增加 `use_versioned_milvus_collections` / `embed_model_name` / `rag_milvus_collection()` 方法；`RagManager` 改用 `rag_milvus_collection()`；`MilvusRagVectorStore.ensure_collection` 增加 `validate_collection_dimension` guard。`from_env` 解析 `USE_VERSIONED_MILVUS_COLLECTIONS` / `EMBED_MODEL_NAME`。 |
+| **测试** | `tests/test_rag_collection_versioning.py`（6 测试） |
 
 ---
 
@@ -185,10 +189,10 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P3 |
-| **问题** | README 曾提 `_add_memory` 修改调用方 dict；当前 Tool 已 `dict(metadata)`，但嵌套对象仍可能共享。 |
-| **可讨论的问题** | 是否统一 `copy.deepcopy`？ |
+| **当前行为** | 所有 `dict(metadata)` 入口替换为 `copy.deepcopy(metadata)`：`BaseMemory.add`、`WorkingMemory.add`、`InMemoryStore.update`、`MemoryManager.update_memory`、`MemoryTool._add_memory/_update_memory`、episodic/semantic/perceptual 模块。嵌套 dict/list 不再与调用方共享引用。 |
+| **测试** | `tests/test_metadata_deepcopy.py`（3 测试） |
 
 ---
 
@@ -196,10 +200,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P3 |
-| **问题** | WorkingMemory 仍保留旧模块引用，与 `InMemoryStore` 按类型索引未完全统一。 |
-| **可讨论的问题** | 重构范围多大？ |
+| **当前行为** | `BaseMemory.store` 重命名为 `_store`（私有），与 Episodic/Semantic/Perceptual 模块一致。`BaseMemory` 提供 `store` property 保持向后兼容。WorkingMemory 内部全部改用 `self._store`。MemoryManager 的 `self.store` 同步改为 `self._store`。 |
 
 ---
 
@@ -219,11 +222,10 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **问题** | `test_simple_agent_memory` 等未走真实 `MemoryTool` + DB 配置路径。 |
-| **目标方案** | 最小真实 manager 或 testcontainer。 |
-| **可讨论的问题** | CI 是否加 Docker job？ |
+| **当前行为** | `tests/test_real_memory_init.py` 覆盖真实初始化路径：MemoryConfig → MemoryManager → MemoryService → MemoryTool → ToolRegistry → SimpleAgent / ReActAgent，仅用 working memory 的 InMemoryStore（无需 PG/Milvus/Neo4j）。6 个测试覆盖 add/search/stats/forget(dry_run+execute) 及 Agent 工具调用全链路。 |
+| **测试** | `tests/test_real_memory_init.py`（6 测试） |
 
 ---
 
@@ -231,10 +233,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P3 |
-| **问题** | 工厂 + CRUD + 统计 + 清空 + outbox 在同一文件（~500 行）。 |
-| **目标方案** | 拆 `operations` / `factory`。 |
+| **当前行为** | `memory/manager.py` 从 610 行降至 120 行。工厂逻辑抽取到 `memory/factory.py`（`setup_outbox` / `create_episodic_memory` / `create_semantic_memory` / `create_perceptual_memory`）；CRUD / forget / consolidate / clear / stats / outbox 操作抽取到 `memory/operations.py`（`MemoryOperations` mixin）。`MemoryManager` 继承 mixin 并委托工厂函数，对外 API 完全不变。 |
 
 ---
 
@@ -242,10 +243,9 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `mitigated`（基础版） |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **当前行为** | `MemoryHookConfig` 默认检索 working+episodic；`record_interaction` 单条合并 Q/A；`enable_memory=True` 默认开启 hooks。 |
-| **剩余** | 其他 Agent 类型、Reflection/PlanAndSolve 专用策略（AG-01/02）。 |
+| **当前行为** | `MemoryHookConfig` 默认检索 working+episodic；`record_interaction` 单条合并 Q/A；`enable_memory=True` 默认开启 hooks。ReflectionAgent 反思后写入 semantic（AG-01 done）；PlanAndSolveAgent 规划前检索 episodic、完成后存入 episodic（AG-02 done）。 |
 
 ---
 
@@ -293,20 +293,22 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P2 |
-| **问题** | `direct` / `hyde` / `multi_query` 按 chunk_id 取最高分合并，无 CrossEncoder。 |
-| **可讨论的问题** | 先上 rerank 还是 HyDE 调参？ |
+| **当前行为** | `rag/reranker.py` 提供 `Reranker` Protocol + `NoneReranker`（透传）+ `LLMReranker`（LLM 打分重排序，失败回退向量分数）；`create_reranker` 工厂。`retriever.search` 启用 `rerank` 时候选扩大 `rerank_candidate_factor×top_k`（默认 3x），rerank 后截断 top_k。`RagManager` → `RagTool` 透传 `rerank` 参数。 |
+| **相关代码** | `rag/reranker.py`、`rag/retriever.py`、`rag/manager.py`、`tools/builtin/rag_tool.py` |
+| **测试** | `tests/test_rag_reranker.py`（14 测试） |
 
 ---
 
-### G-03 · URL / 目录批量摄取未做
+### G-03 · URL / 目录批量摄取
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open` |
+| **状态** | `done` |
 | **优先级** | P3 |
 | **问题** | MVP 仅本地单文件。 |
+| **解决方案** | RagManager 增加 `ingest_url`（下载到临时文件，source_uri 保留原始 URL）和 `ingest_directory`（glob 遍历，返回 BatchIngestResult 含成功/失败列表）。RagTool source_type 支持 file / url / directory。 |
 
 ---
 
@@ -322,24 +324,27 @@
 
 ## 八、Agent 与跨模块集成（open）
 
-### AG-01 · ReflectionAgent 未接语义记忆沉淀
+### AG-01 · ReflectionAgent 语义记忆沉淀
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open`（产品排期） |
+| **状态** | `done` |
 | **优先级** | P2 |
 | **问题** | 自我批评结果未自动写入 semantic。 |
-| **可讨论的问题** | 写入时机？由 Agent 调 Tool 还是框架自动？ |
+| **解决方案** | ReflectionAgent 增加 `memory_service` / `enable_memory` 参数。反思循环结束后，`_maybe_record_reflection` 将问题、批评摘要、最终答案写入 semantic 记忆（importance=0.7）。写入失败不影响 Agent 正常返回。`with_agent_tools(enable_memory=True)` 自动创建 MemoryService。向后兼容：默认不启用。 |
+| **测试** | `tests/test_reflection_memory.py`（6 测试） |
 
 ---
 
-### AG-02 · PlanAndSolveAgent 未接情景记忆复用
+### AG-02 · PlanAndSolveAgent 情景记忆复用
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | `open`（产品排期） |
+| **状态** | `done` |
 | **优先级** | P2 |
 | **问题** | 历史计划未从 episodic 检索复用。 |
+| **解决方案** | PlanAndSolveAgent 增加 `memory_service` / `enable_memory` 参数。规划前 `_retrieve_past_plans` 从 episodic 检索相似历史计划并注入 planner 上下文；完成后 `_maybe_record_plan` 将问题、计划、最终答案存入 episodic 记忆（importance=0.6）。检索/写入失败均不影响 Agent 正常运行。`with_agent_tools(enable_memory=True)` 自动创建 MemoryService。向后兼容：默认不启用。 |
+| **测试** | `tests/test_plan_solve_memory.py`（8 测试） |
 
 ---
 

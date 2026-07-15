@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import log
+
 import json
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -251,7 +253,8 @@ class Neo4jSemanticMemoryStore:
                     WHERE coalesce(m.deleted, false) = false
                     RETURN m.id AS id,
                            count(DISTINCT bridge.name) AS bridges,
-                           avg(coalesce(r.weight, 1.0)) AS relation_weight
+                           avg(coalesce(r.weight, 1.0)) AS relation_weight,
+                           avg(coalesce(r.co_occurrence_count, 1.0)) AS avg_co_occurrence
                     """,
                     {"user_id": user_id, "concepts": concepts},
                 ).data()
@@ -272,9 +275,14 @@ class Neo4jSemanticMemoryStore:
                 memory_id = str(row["id"])
                 bridges = float(row.get("bridges") or 0)
                 relation_weight = float(row.get("relation_weight") or 1.0)
+                co_occurrence = float(row.get("avg_co_occurrence") or 1.0)
+                # PMI-inspired boost: higher co-occurrence = stronger relation
+                # Use log scale to prevent high counts from dominating
+                pmi_boost = min(2.0, 1.0 + log(max(1.0, co_occurrence)) / 2.0)
                 hop_score = (
                     min(1.0, bridges / max(1.0, denominator))
                     * relation_weight
+                    * pmi_boost
                     * relates_weight
                     * hop2_weight
                 )
@@ -849,7 +857,9 @@ def _write_memory_with_outbox_tx(tx: Any, params: dict[str, Any]) -> None:
         UNWIND concept_nodes AS c1
         UNWIND concept_nodes AS c2
         WITH m, c1, c2 WHERE id(c1) < id(c2)
-        MERGE (c1)-[:RELATES_TO {weight: 1.0}]->(c2)
+        MERGE (c1)-[r:RELATES_TO]->(c2)
+        ON CREATE SET r.co_occurrence_count = 1, r.weight = 1.0
+        ON MATCH SET r.co_occurrence_count = r.co_occurrence_count + 1
         WITH m
         CREATE (e:SemanticOutboxEvent {
             id: $event_id,

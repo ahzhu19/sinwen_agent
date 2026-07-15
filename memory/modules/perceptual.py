@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import math
 from datetime import datetime
 from typing import Any
@@ -12,6 +14,7 @@ from ..records import perceptual_item_to_record
 from ..storage.vector_outbox import VectorWriteError
 from ..vector_outbox_processor import VectorOutboxProcessor
 from .base import MemoryRecord
+from ..orphan_detection import detect_orphan_vectors
 
 _ALLOWED_MODALITIES = frozenset({"text", "image", "audio", "video", "file"})
 
@@ -71,7 +74,7 @@ class PerceptualMemory:
         if existing is None or existing.user_id != self.user_id:
             raise KeyError(f"未找到记忆: {memory_id}")
 
-        enriched_metadata = dict(metadata)
+        enriched_metadata = copy.deepcopy(metadata)
         modality = self._normalize_modality(
             enriched_metadata.get("modality", existing.modality)
         )
@@ -111,7 +114,7 @@ class PerceptualMemory:
         importance: float,
         metadata: dict[str, Any],
     ) -> Any:
-        enriched_metadata = dict(metadata)
+        enriched_metadata = copy.deepcopy(metadata)
         modality = self._normalize_modality(enriched_metadata.get("modality"))
         raw_data = enriched_metadata.get("raw_data")
         created_at = str(
@@ -222,7 +225,9 @@ class PerceptualMemory:
         if not hits_by_id:
             return []
 
-        items = self._store.get_many(list(hits_by_id.keys()))
+        hit_ids = list(hits_by_id.keys())
+        items = self._store.get_many(hit_ids)
+        detect_orphan_vectors(hit_ids, [item.id for item in items], memory_kind="perceptual")
         scored: list[tuple[float, MemoryRecord]] = []
         for item in items:
             vector_score, hit_modality = hits_by_id.get(item.id, (0.0, item.modality))

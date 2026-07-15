@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 from typing import Any
 from uuid import uuid4
 
@@ -52,7 +54,7 @@ class SemanticMemory:
             memory_id,
             content=content,
             importance=importance,
-            metadata=dict(metadata),
+            metadata=copy.deepcopy(metadata),
             operation="create",
         )
         return memory_id
@@ -72,7 +74,7 @@ class SemanticMemory:
             memory_id,
             content=content,
             importance=importance,
-            metadata=dict(metadata),
+            metadata=copy.deepcopy(metadata),
             operation="update",
         )
         return memory_id
@@ -86,7 +88,7 @@ class SemanticMemory:
         metadata: dict[str, Any],
         operation: str,
     ) -> None:
-        payload = dict(metadata)
+        payload = copy.deepcopy(metadata)
         extraction = extract_concepts(self._concept_extractor, content, payload)
         concepts = extraction.concepts
         payload["concept_extraction_source"] = extraction.source
